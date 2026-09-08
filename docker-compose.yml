@@ -1,0 +1,54 @@
+name: gestionale-gv
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: gestionale-gv-backend
+    working_dir: /workspace
+    command: mvn spring-boot:run
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      TZ: Europe/Rome
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATASOURCE_URL: ${SUPABASE_DB_JDBC_URL}
+      SPRING_DATASOURCE_USERNAME: ${SUPABASE_DB_USER}
+      SPRING_DATASOURCE_PASSWORD: ${SUPABASE_DB_PASSWORD}
+    volumes:
+      - ./backend:/workspace
+      - maven-repository:/root/.m2
+    networks:
+      - app-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: gestionale-gv-frontend
+    working_dir: /workspace
+    command: sh -c "if [ ! -d node_modules/.bin ]; then npm install; fi; npm run dev -- --host 0.0.0.0"
+    ports:
+      - "5173:5173"
+    environment:
+      TZ: Europe/Rome
+      # Usato dal browser: deve essere l'URL esposto dal backend, non il nome del container.
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:8080}
+    volumes:
+      - ./frontend:/workspace
+      - frontend-node-modules:/workspace/node_modules
+    depends_on:
+      - backend
+    networks:
+      - app-network
+
+volumes:
+  maven-repository:
+  frontend-node-modules:
+
+networks:
+  app-network:
+    driver: bridge
