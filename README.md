@@ -2,7 +2,7 @@
 
 Questa configurazione avvia due container Linux separati:
 
-- `frontend`: React/Vite su `http://localhost:5173`
+- `frontend`: React/Vite su `http://localhost:3000`
 - `backend`: Spring Boot REST su `http://localhost:8080`
 
 Il database non viene eseguito localmente: il backend usa PostgreSQL ospitato su Supabase.

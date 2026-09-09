@@ -31,9 +31,9 @@ services:
       dockerfile: Dockerfile
     container_name: gestionale-gv-frontend
     working_dir: /workspace
-    command: sh -c "if [ ! -d node_modules/.bin ]; then npm install; fi; npm run dev -- --host 0.0.0.0"
+    command: sh -c "if [ ! -d node_modules/.bin ]; then npm install; fi; npm run dev -- --host 0.0.0.0 --port 3000"
     ports:
-      - "5173:5173"
+      - "3000:3000"
     environment:
       TZ: Europe/Rome
       # Usato dal browser: deve essere l'URL esposto dal backend, non il nome del container.
