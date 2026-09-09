@@ -4,7 +4,18 @@
  * In production, relative path /api automatically routes through reverse proxy or same-origin.
  */
 
-const API_BASE = import.meta.env.VITE_API_URL ? `${import.meta.env.VITE_API_URL}/api/v1` : '/api/v1';
+const getApiBase = () => {
+  if (import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL.replace(/\/+$/, '') + '/api/v1';
+  }
+  if (typeof window !== 'undefined' && window.location.hostname.includes('sslip.io')) {
+    const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
+    return `${protocol}//api-gestionale.51.38.98.213.sslip.io/api/v1`;
+  }
+  return '/api/v1';
+};
+
+const API_BASE = getApiBase();
 
 export const tokenStorage = {
   get: () => localStorage.getItem('gv_token'),
