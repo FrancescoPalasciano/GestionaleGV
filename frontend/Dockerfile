@@ -2,6 +2,8 @@ FROM node:22-alpine
 
 WORKDIR /workspace
 
+RUN apk add --no-cache curl wget
+
 # Installazione dipendenze
 COPY package*.json ./
 RUN npm install
