@@ -43,8 +43,9 @@ services:
       - "3000:3000"
     environment:
       TZ: Europe/Rome
-      # Usato dal browser: deve essere l'URL esposto dal backend, non il nome del container.
-      VITE_API_URL: ${VITE_API_URL:-http://localhost:8080}
+      BACKEND_URL: http://backend:8080
+      # Usato dal browser se si vuole chiamare direttamente l'URL esposto dal backend:
+      VITE_API_URL: ${VITE_API_URL:-}
     volumes:
       - ./frontend:/workspace
       - frontend-node-modules:/workspace/node_modules
