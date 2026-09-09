@@ -63,6 +63,38 @@ export default function App() {
     }
   }, [])
 
+  // Lock body scroll when mobile sidebar drawer is open
+  useEffect(() => {
+    if (sidebarMobileOpen) {
+      document.body.classList.add('sidebar-open')
+    } else {
+      document.body.classList.remove('sidebar-open')
+    }
+    return () => {
+      document.body.classList.remove('sidebar-open')
+    }
+  }, [sidebarMobileOpen])
+
+  // Close mobile sidebar on Escape or window resize > 900px
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && sidebarMobileOpen) {
+        setSidebarMobileOpen(false)
+      }
+    }
+    const handleResize = () => {
+      if (window.innerWidth > 900 && sidebarMobileOpen) {
+        setSidebarMobileOpen(false)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('resize', handleResize)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('resize', handleResize)
+    }
+  }, [sidebarMobileOpen])
+
   const handleInputChange = (e) => {
     const { name, value, type, checked } = e.target
     setFormData((prev) => ({
@@ -187,13 +219,13 @@ export default function App() {
                       setSidebarCollapsed(!sidebarCollapsed)
                     }
                   }}
-                  title="Mostra barra laterale"
-                  aria-label="Mostra barra laterale"
+                  title="Menu di navigazione"
+                  aria-label="Menu di navigazione"
                 >
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                    <line x1="9" y1="3" x2="9" y2="21" />
-                    <path d="m13 15 3-3-3-3" />
+                    <line x1="4" y1="6" x2="20" y2="6" />
+                    <line x1="4" y1="12" x2="20" y2="12" />
+                    <line x1="4" y1="18" x2="20" y2="18" />
                   </svg>
                 </button>
               )}
@@ -202,6 +234,21 @@ export default function App() {
                 <span className="breadcrumb-category">{tabLabels[activeTab] || 'Dashboard'}</span>
                 <span className="breadcrumb-slash">/</span>
                 <span className="breadcrumb-view">{t.nav.desktopView}</span>
+              </div>
+            </div>
+
+            <div className="breadcrumb-right">
+              <div 
+                className="header-status-badge"
+                title={backendOnline ? t.nav.connectedStatus : t.nav.offlineStatus}
+              >
+                <span 
+                  className="header-status-dot" 
+                  style={{ backgroundColor: backendOnline ? '#0F6B4F' : '#d9383a' }} 
+                />
+                <span className="header-status-text">
+                  {backendOnline ? 'Online' : 'Offline'}
+                </span>
               </div>
             </div>
           </header>
