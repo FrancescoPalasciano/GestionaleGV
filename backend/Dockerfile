@@ -23,7 +23,7 @@ COPY --from=build /workspace/target/*.jar /app/app.jar
 
 EXPOSE 8080
 
-HEALTHCHECK --interval=20s --timeout=5s --start-period=25s --retries=3 \
+HEALTHCHECK --interval=20s --timeout=5s --start-period=40s --retries=3 \
   CMD curl -f -s http://localhost:8080/api/v1/health || exit 1
 
 CMD ["java", "-jar", "app.jar"]
