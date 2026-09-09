@@ -4,7 +4,7 @@ export default {
   
   // Navigation & Sidebar
   nav: {
-    brandPro: "TABACCHI PRO",
+    brandPro: "PALASCIANO",
     dashboard: "Dashboard",
     grattaEVinci: "Gratta e Vinci",
     statistiche: "Statistiche",

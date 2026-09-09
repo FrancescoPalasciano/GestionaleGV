@@ -236,9 +236,9 @@ export default function App() {
       {/* Top Header shown ONLY when not logged in */}
       <header className="top-header" role="banner">
         <div className="brand-badge" onClick={() => setMode('login')}>
-          <div className="brand-icon">TP</div>
+          <div className="brand-icon">P</div>
           <div className="brand-text">
-            <span className="brand-title">TABACCHI <span>PRO</span></span>
+            <span className="brand-title">PALASCIANO</span>
             <span className="brand-sub">{t.brandSubtitle}</span>
           </div>
         </div>

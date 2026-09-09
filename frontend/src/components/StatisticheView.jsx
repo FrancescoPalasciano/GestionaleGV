@@ -493,7 +493,7 @@ export default function StatisticheView({ t, user }) {
 <body>
   <div class="print-header">
     <div class="brand-group">
-      <h1>Tabacchino Pro</h1>
+      <h1>Palasciano</h1>
       <p>Gestione Certificata Monopolio · Gratta e Vinci</p>
     </div>
     <div class="meta-group">
@@ -621,7 +621,7 @@ export default function StatisticheView({ t, user }) {
   </div>
 
   <div class="print-footer-note">
-    Documento contabile ad uso interno gestionale emesso dal software Tabacchino Pro · Conforme alle percentuali di aggio vigenti (8% ADM)
+    Documento contabile ad uso interno gestionale emesso dal software Palasciano · Conforme alle percentuali di aggio vigenti (8% ADM)
   </div>
 </body>
 </html>`
