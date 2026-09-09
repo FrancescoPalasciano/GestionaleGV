@@ -7,6 +7,73 @@ function formatEuro(val) {
   return '€ ' + num.toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
+// Helper per generare curve morbide e naturali (Catmull-Rom / cubic bezier)
+function createSmoothPath(pts, yProp) {
+  if (!pts || pts.length === 0) return ''
+  if (pts.length === 1) return `M ${pts[0].x.toFixed(1)} ${pts[0][yProp].toFixed(1)}`
+  if (pts.length === 2) {
+    return `M ${pts[0].x.toFixed(1)} ${pts[0][yProp].toFixed(1)} L ${pts[1].x.toFixed(1)} ${pts[1][yProp].toFixed(1)}`
+  }
+
+  let d = `M ${pts[0].x.toFixed(1)} ${pts[0][yProp].toFixed(1)}`
+  const tension = 0.22 // Curvatura bilanciata e sobria, ideale per grafici contabili
+
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i === 0 ? 0 : i - 1]
+    const p1 = pts[i]
+    const p2 = pts[i + 1]
+    const p3 = pts[i + 2 >= pts.length ? pts.length - 1 : i + 2]
+
+    const cp1x = p1.x + (p2.x - p0.x) * tension
+    const cp1y = p1[yProp] + (p2[yProp] - p0[yProp]) * tension
+    const cp2x = p2.x - (p3.x - p1.x) * tension
+    const cp2y = p2[yProp] - (p3[yProp] - p1[yProp]) * tension
+
+    d += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2[yProp].toFixed(1)}`
+  }
+  return d
+}
+
+function createAreaPath(pts, yProp, baselineY) {
+  if (!pts || pts.length === 0) return ''
+  const linePath = createSmoothPath(pts, yProp)
+  const lastX = pts[pts.length - 1].x.toFixed(1)
+  const firstX = pts[0].x.toFixed(1)
+  return `${linePath} L ${lastX} ${baselineY.toFixed(1)} L ${firstX} ${baselineY.toFixed(1)} Z`
+}
+
+// Calcolo scaglioni asse Y con numeri tondi puliti (mai numeri strani come 17 o 33)
+function calculateNiceTicks(maxFound) {
+  if (!maxFound || maxFound <= 0) {
+    return {
+      maxVal: 60,
+      ticks: [0, 20, 40, 60],
+    }
+  }
+
+  const targetIntervals = 4
+  const rawStep = (maxFound * 1.15) / targetIntervals
+  const niceSteps = [
+    5, 10, 15, 20, 25, 50, 75, 100, 150, 200, 250, 500, 750, 1000, 1500, 2000, 2500, 5000, 10000
+  ]
+
+  let step = niceSteps[niceSteps.length - 1]
+  for (const s of niceSteps) {
+    if (s >= rawStep) {
+      step = s
+      break
+    }
+  }
+
+  const maxVal = step * targetIntervals
+  const ticks = []
+  for (let i = 0; i <= targetIntervals; i++) {
+    ticks.push(i * step)
+  }
+
+  return { maxVal, ticks }
+}
+
 function formatNumber(val) {
   const num = Number(val || 0)
   return num.toLocaleString('it-IT')
@@ -51,9 +118,26 @@ export default function StatisticheView({ t, user }) {
     }
   }, [period, refDate])
 
+  // Fetch silenzioso per polling multi-dispositivo (non mostra loading, non sovrascrive errori)
+  const fetchStatisticsSilent = useCallback(async () => {
+    try {
+      const data = await api.gv.getStatistics(period, refDate)
+      setStats(data)
+    } catch (err) {
+      // Silenzioso: non sovrascrivere l'interfaccia con errori di polling
+    }
+  }, [period, refDate])
+
+  // Caricamento iniziale e polling automatico ogni 30s per sincronizzazione multi-dispositivo
   useEffect(() => {
     fetchStatistics()
-  }, [fetchStatistics])
+
+    const intervalId = setInterval(() => {
+      fetchStatisticsSilent()
+    }, 30000)
+
+    return () => clearInterval(intervalId)
+  }, [fetchStatistics, fetchStatisticsSilent])
 
   // Navigazione temporale (Giorno / Mese / Anno precedente e successivo)
   const handleNavigate = (delta) => {
@@ -82,34 +166,521 @@ export default function StatisticheView({ t, user }) {
     setRefDate(`${y}-${m}-${d}`)
   }
 
-  // Etichetta del periodo calcolata
-  const displayedPeriodLabel = useMemo(() => {
-    if (stats?.periodLabel) return stats.periodLabel
+  // Etichetta del periodo calcolata (estesa per desktop, compatta per mobile)
+  const { displayedPeriodLabel, shortPeriodLabel } = useMemo(() => {
     const parts = refDate.split('-').map(Number)
     const d = new Date(parts[0], parts[1] - 1, parts[2], 12, 0, 0)
+    let full = ''
+    let short = ''
+
     if (period === 'day') {
       const s = d.toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
-      return s.charAt(0).toUpperCase() + s.slice(1)
-    }
-    if (period === 'month') {
+      full = s.charAt(0).toUpperCase() + s.slice(1)
+      const sh = d.toLocaleDateString('it-IT', { weekday: 'short', day: 'numeric', month: 'short' })
+      short = sh.charAt(0).toUpperCase() + sh.slice(1)
+    } else if (period === 'month') {
       const s = d.toLocaleDateString('it-IT', { month: 'long', year: 'numeric' })
-      return s.charAt(0).toUpperCase() + s.slice(1)
+      full = s.charAt(0).toUpperCase() + s.slice(1)
+      const sh = d.toLocaleDateString('it-IT', { month: 'short', year: 'numeric' })
+      short = sh.charAt(0).toUpperCase() + sh.slice(1)
+    } else {
+      full = `Anno ${d.getFullYear()}`
+      short = `${d.getFullYear()}`
     }
-    return `Anno ${d.getFullYear()}`
+
+    if (stats?.periodLabel) {
+      full = stats.periodLabel
+    }
+
+    return { displayedPeriodLabel: full, shortPeriodLabel: short }
   }, [stats, period, refDate])
 
-  // Configurazione del Grafico SVG
+  // Generazione del prospetto contabile A4 pronto per la stampa e salvataggio in PDF
+  const handlePrintPdf = useCallback(() => {
+    const s = stats || {
+      totalRevenue: 0,
+      totalAggio: 0,
+      totalWinnings: 0,
+      winningsCount: 0,
+      netCashFlow: 0,
+      averageTicketPrice: 0,
+      payoutRate: 0,
+      totalTickets: 0,
+      singleWinningsAmount: 0,
+      singleWinningsCount: 0,
+      closingWinningsAmount: 0,
+      closingWinningsCount: 0,
+      totalStecche: 0,
+      totalSteccheTickets: 0,
+      totalPurchases: 0,
+      tierStats: [],
+      winningStats: [],
+    }
+
+    const now = new Date()
+    const printDateStr = now.toLocaleDateString('it-IT', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    })
+    const printTimeStr = now.toLocaleTimeString('it-IT', {
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+
+    const operatore = user?.nome || user?.username || 'Operatore di cassa'
+    const docTitle = `Prospetto_Statistiche_GV_${refDate}_${period}`
+
+    const tierRowsHtml = (s.tierStats || []).map((t) => {
+      const p = Number(t.price).toFixed(2).replace('.', ',')
+      const tickets = formatNumber(t.ticketsSold)
+      const rev = formatEuro(t.revenue)
+      const agg = formatEuro(t.aggio)
+      const share = Number(t.percentageShare || 0).toFixed(1).replace('.', ',') + '%'
+      return `
+        <tr>
+          <td style="font-weight: 700; color: #171717;">€ ${p}</td>
+          <td style="text-align: center; font-weight: 600;">${tickets} pz</td>
+          <td style="text-align: right; font-weight: 600; color: #171717;">${rev}</td>
+          <td style="text-align: right; font-weight: 700; color: #0F6B4F;">${agg}</td>
+          <td style="text-align: right; font-weight: 600;">${share}</td>
+        </tr>
+      `
+    }).join('')
+
+    const printableHtml = `<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <title>${docTitle}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Source+Sans+3:wght@700&display=swap" rel="stylesheet">
+  <style>
+    @page {
+      size: A4 portrait;
+      margin: 12mm 14mm 12mm 14mm;
+    }
+    * {
+      box-sizing: border-box;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+      font-size: 10pt;
+      color: #171717;
+      background: #ffffff;
+      line-height: 1.35;
+    }
+    .print-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      padding-bottom: 10px;
+      border-bottom: 2px solid #0F6B4F;
+      margin-bottom: 12px;
+    }
+    .brand-group h1 {
+      font-family: 'Source Sans 3', sans-serif;
+      font-size: 19pt;
+      margin: 0;
+      color: #0F6B4F;
+      letter-spacing: -0.3px;
+    }
+    .brand-group p {
+      margin: 2px 0 0 0;
+      font-size: 8.5pt;
+      color: #55665d;
+      font-weight: 600;
+    }
+    .meta-group {
+      text-align: right;
+      font-size: 8.5pt;
+      color: #55665d;
+      line-height: 1.4;
+    }
+    .meta-group strong {
+      color: #171717;
+    }
+    .report-banner {
+      background: #f4f8f5;
+      border-left: 4px solid #0F6B4F;
+      padding: 7px 12px;
+      margin-bottom: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .report-banner h2 {
+      margin: 0;
+      font-size: 11pt;
+      font-weight: 800;
+      color: #0F6B4F;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+    .report-banner .period-tag {
+      font-size: 9.5pt;
+      font-weight: 700;
+      color: #171717;
+    }
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    .kpi-box {
+      border: 1px solid #dce5df;
+      background: #fafcfb;
+      border-radius: 6px;
+      padding: 8px 10px;
+    }
+    .kpi-box.highlight {
+      border: 1.5px solid #0F6B4F;
+      background: #f2f9f5;
+    }
+    .kpi-label {
+      font-size: 7.5pt;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: #63736b;
+      letter-spacing: 0.2px;
+      margin-bottom: 2px;
+    }
+    .kpi-val {
+      font-size: 12.5pt;
+      font-weight: 800;
+      color: #171717;
+      margin-bottom: 1px;
+    }
+    .kpi-val.green {
+      color: #0F6B4F;
+    }
+    .kpi-val.amber {
+      color: #b45309;
+    }
+    .kpi-sub {
+      font-size: 7.5pt;
+      color: #63736b;
+    }
+    .section-title {
+      font-size: 9.5pt;
+      font-weight: 800;
+      color: #171717;
+      margin: 0 0 6px 0;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .section-title::before {
+      content: '';
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      background-color: #0F6B4F;
+      border-radius: 1px;
+    }
+    table.data-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 8.5pt;
+      margin-bottom: 14px;
+    }
+    table.data-table th {
+      background-color: #f0f5f2;
+      color: #3b5044;
+      font-weight: 700;
+      text-transform: uppercase;
+      font-size: 7.5pt;
+      letter-spacing: 0.3px;
+      padding: 5px 8px;
+      border-top: 1px solid #d0ded6;
+      border-bottom: 1.5px solid #0F6B4F;
+    }
+    table.data-table td {
+      padding: 5px 8px;
+      border-bottom: 1px solid #e5ece8;
+      color: #171717;
+    }
+    table.data-table tr:nth-child(even) {
+      background-color: #fcfdfc;
+    }
+    table.data-table tfoot td {
+      background-color: #eef5f1;
+      font-weight: 800;
+      border-top: 1.5px solid #0F6B4F;
+      border-bottom: 1.5px solid #0F6B4F;
+      color: #0F6B4F;
+      font-size: 9pt;
+    }
+    .sub-panels-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 14px;
+      page-break-inside: avoid;
+    }
+    .sub-panel {
+      border: 1px solid #dce5df;
+      border-radius: 6px;
+      padding: 9px 11px;
+      background: #fafcfb;
+    }
+    .sub-panel h3 {
+      margin: 0 0 6px 0;
+      font-size: 8.5pt;
+      font-weight: 800;
+      color: #0F6B4F;
+      text-transform: uppercase;
+    }
+    .info-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 8pt;
+      padding: 3px 0;
+      border-bottom: 1px dashed #e2e9e5;
+    }
+    .info-row:last-child {
+      border-bottom: none;
+    }
+    .info-row span {
+      color: #55665d;
+    }
+    .info-row strong {
+      color: #171717;
+    }
+    .print-signatures {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 20px;
+      padding-top: 12px;
+      border-top: 1px solid #d8e3dc;
+      page-break-inside: avoid;
+    }
+    .sig-box {
+      width: 44%;
+    }
+    .sig-title {
+      font-size: 7.5pt;
+      font-weight: 700;
+      color: #63736b;
+      text-transform: uppercase;
+      margin-bottom: 26px;
+    }
+    .sig-line {
+      border-top: 1px solid #171717;
+      font-size: 7.5pt;
+      color: #63736b;
+      padding-top: 3px;
+      text-align: center;
+    }
+    .print-footer-note {
+      margin-top: 14px;
+      text-align: center;
+      font-size: 7pt;
+      color: #8c9e94;
+      border-top: 1px solid #edf2ee;
+      padding-top: 5px;
+    }
+  </style>
+</head>
+<body>
+  <div class="print-header">
+    <div class="brand-group">
+      <h1>Tabacchino Pro</h1>
+      <p>Gestione Certificata Monopolio · Gratta e Vinci</p>
+    </div>
+    <div class="meta-group">
+      <div>Data di emissione: <strong>${printDateStr} ore ${printTimeStr}</strong></div>
+      <div>Operatore: <strong>${operatore}</strong></div>
+      <div>Protocollo: <strong>GV-${refDate.replace(/-/g, '')}-${period.toUpperCase()}</strong></div>
+    </div>
+  </div>
+
+  <div class="report-banner">
+    <h2>Prospetto Contabile Statistico</h2>
+    <div class="period-tag">${displayedPeriodLabel}</div>
+  </div>
+
+  <!-- Quadro di Sintesi Economica -->
+  <div class="kpi-grid">
+    <div class="kpi-box">
+      <div class="kpi-label">Incasso Lordo Vendite</div>
+      <div class="kpi-val">${formatEuro(s.totalRevenue)}</div>
+      <div class="kpi-sub">${formatNumber(s.totalTickets)} biglietti venduti</div>
+    </div>
+
+    <div class="kpi-box highlight">
+      <div class="kpi-label">Aggio Rivendita (8% ADM)</div>
+      <div class="kpi-val green">${formatEuro(s.totalAggio)}</div>
+      <div class="kpi-sub">Compenso netto spettante</div>
+    </div>
+
+    <div class="kpi-box">
+      <div class="kpi-label">Vincite Pagate al Banco</div>
+      <div class="kpi-val amber">${formatEuro(s.totalWinnings)}</div>
+      <div class="kpi-sub">${formatNumber(s.winningsCount)} vincite rimborsate</div>
+    </div>
+
+    <div class="kpi-box">
+      <div class="kpi-label">Saldo Flusso Cassa</div>
+      <div class="kpi-val ${(s.netCashFlow || 0) >= 0 ? 'green' : 'amber'}">${formatEuro(s.netCashFlow)}</div>
+      <div class="kpi-sub">Incasso lordo meno rimborsi</div>
+    </div>
+
+    <div class="kpi-box">
+      <div class="kpi-label">Scontrino Medio Biglietto</div>
+      <div class="kpi-val">${formatEuro(s.averageTicketPrice)}</div>
+      <div class="kpi-sub">Prezzo medio per tagliando</div>
+    </div>
+
+    <div class="kpi-box">
+      <div class="kpi-label">Payout Rate al Banco</div>
+      <div class="kpi-val amber">${Number(s.payoutRate || 0).toFixed(1).replace('.', ',')}%</div>
+      <div class="kpi-sub">Rapporto vincite / incasso</div>
+    </div>
+  </div>
+
+  <!-- Tabella Dettagliata per Fascia di Prezzo -->
+  <div class="section-title">Ripartizione Vendite per Fascia di Prezzo</div>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th style="text-align: left;">Taglio Prezzo</th>
+        <th style="text-align: center;">Biglietti Battuti</th>
+        <th style="text-align: right;">Incasso Lordo</th>
+        <th style="text-align: right;">Aggio Netto (8%)</th>
+        <th style="text-align: right;">Incidenza %</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${tierRowsHtml || '<tr><td colspan="5" style="text-align: center; padding: 10px; color: #888;">Nessuna vendita registrata nel periodo.</td></tr>'}
+    </tbody>
+    <tfoot>
+      <tr>
+        <td>TOTALE COMPLESSIVO</td>
+        <td style="text-align: center;">${formatNumber(s.totalTickets)} pz</td>
+        <td style="text-align: right;">${formatEuro(s.totalRevenue)}</td>
+        <td style="text-align: right;">${formatEuro(s.totalAggio)}</td>
+        <td style="text-align: right;">100,0%</td>
+      </tr>
+    </tfoot>
+  </table>
+
+  <!-- Dettaglio Flussi & Scorte -->
+  <div class="sub-panels-grid">
+    <div class="sub-panel">
+      <h3>Dettaglio Vincite Rimborsate</h3>
+      <div class="info-row">
+        <span>Vincite singole al banco:</span>
+        <strong>${formatEuro(s.singleWinningsAmount)} (${s.singleWinningsCount || 0} op.)</strong>
+      </div>
+      <div class="info-row">
+        <span>Chiusure serali scontrino:</span>
+        <strong>${formatEuro(s.closingWinningsAmount)} (${s.closingWinningsCount || 0} op.)</strong>
+      </div>
+      <div class="info-row" style="font-weight: 700; color: #0F6B4F;">
+        <span>Totale rimborsi erogati:</span>
+        <strong>${formatEuro(s.totalWinnings)}</strong>
+      </div>
+    </div>
+
+    <div class="sub-panel">
+      <h3>Bilancio Scorte & Forniture Ricevute</h3>
+      <div class="info-row">
+        <span>Stecche fornite dal logista:</span>
+        <strong>${formatNumber(s.totalStecche)} st (${formatNumber(s.totalSteccheTickets)} pz)</strong>
+      </div>
+      <div class="info-row">
+        <span>Costo fornitura (€ 300/st):</span>
+        <strong>${formatEuro(s.totalPurchases)}</strong>
+      </div>
+      <div class="info-row">
+        <span>Biglietti venduti al banco:</span>
+        <strong style="color: #0F6B4F;">${formatNumber(s.totalTickets)} pz</strong>
+      </div>
+    </div>
+  </div>
+
+  <!-- Firme e Convalida -->
+  <div class="print-signatures">
+    <div class="sig-box">
+      <div class="sig-title">Timbro Rivendita Monopoli</div>
+      <div class="sig-line">Timbro della Tabaccheria</div>
+    </div>
+    <div class="sig-box">
+      <div class="sig-title">Firma Titolare / Operatore</div>
+      <div class="sig-line">Firma per quietanza contabile</div>
+    </div>
+  </div>
+
+  <div class="print-footer-note">
+    Documento contabile ad uso interno gestionale emesso dal software Tabacchino Pro · Conforme alle percentuali di aggio vigenti (8% ADM)
+  </div>
+</body>
+</html>`
+
+    let printFrame = document.getElementById('stats-print-frame')
+    if (!printFrame) {
+      printFrame = document.createElement('iframe')
+      printFrame.id = 'stats-print-frame'
+      printFrame.style.position = 'fixed'
+      printFrame.style.right = '0'
+      printFrame.style.bottom = '0'
+      printFrame.style.width = '0'
+      printFrame.style.height = '0'
+      printFrame.style.border = '0'
+      document.body.appendChild(printFrame)
+    }
+
+    const frameDoc = printFrame.contentWindow.document
+    frameDoc.open()
+    frameDoc.write(printableHtml)
+    frameDoc.close()
+
+    setTimeout(() => {
+      printFrame.contentWindow.focus()
+      printFrame.contentWindow.print()
+    }, 250)
+  }, [stats, period, refDate, displayedPeriodLabel, user])
+
+  // Configurazione del Grafico SVG ad alta leggibilità (proporzionato, non schiacciato)
   const chartConfig = useMemo(() => {
-    const width = 880
-    const height = 260
-    const padLeft = 65
-    const padRight = 30
-    const padTop = 25
-    const padBottom = 38
+    // Proporzioni ottimali: altezza aumentata a 360px per evitare l'effetto schiacciato
+    const width = 1000
+    const height = 360
+    const padLeft = 70
+    const padRight = 35
+    const padTop = 32
+    const padBottom = 54
+    const baselineY = height - padBottom // 306px
 
     const points = stats?.chartPoints || []
     if (points.length === 0) {
-      return { width, height, padLeft, padRight, padTop, padBottom, maxVal: 100, coords: [], gridLines: [] }
+      return {
+        width,
+        height,
+        padLeft,
+        padRight,
+        padTop,
+        padBottom,
+        baselineY,
+        maxVal: 60,
+        isZeroState: true,
+        coords: [],
+        gridLines: [
+          { val: 0, y: baselineY },
+          { val: 20, y: baselineY - (height - padTop - padBottom) * 0.33 },
+          { val: 40, y: baselineY - (height - padTop - padBottom) * 0.66 },
+          { val: 60, y: padTop },
+        ],
+      }
     }
 
     // Calcolo valore massimo tra incasso lordo e vincite
@@ -119,23 +690,16 @@ export default function StatisticheView({ t, user }) {
       if (p.winnings > maxFound) maxFound = p.winnings
     })
 
-    // Arrotondamento per gradini gradevoli
-    let maxVal = Math.max(20, Math.ceil(maxFound * 1.15))
-    if (maxVal <= 50) maxVal = 50
-    else if (maxVal <= 100) maxVal = 100
-    else if (maxVal <= 250) maxVal = 250
-    else if (maxVal <= 500) maxVal = 500
-    else if (maxVal <= 1000) maxVal = 1000
-    else if (maxVal <= 2500) maxVal = 2500
-    else maxVal = Math.ceil(maxVal / 500) * 500
+    const isZeroState = maxFound === 0
+    const { maxVal, ticks } = calculateNiceTicks(maxFound)
 
     const plotWidth = width - padLeft - padRight
     const plotHeight = height - padTop - padBottom
 
-    // Linee orizzontali griglia
-    const gridLines = [0, 0.33, 0.66, 1].map((ratio) => {
-      const val = Math.round(maxVal * ratio)
-      const y = height - padBottom - ratio * plotHeight
+    // Linee orizzontali con scaglioni puliti e precisi
+    const gridLines = ticks.map((val) => {
+      const ratio = val / maxVal
+      const y = baselineY - ratio * plotHeight
       return { val, y }
     })
 
@@ -144,13 +708,13 @@ export default function StatisticheView({ t, user }) {
     const coords = points.map((p, idx) => {
       const x = n === 1 ? padLeft + plotWidth / 2 : padLeft + (idx / (n - 1)) * plotWidth
       const revRatio = Math.min(1, Math.max(0, (p.revenue || 0) / maxVal))
-      const yRev = height - padBottom - revRatio * plotHeight
+      const yRev = baselineY - revRatio * plotHeight
 
       const aggRatio = Math.min(1, Math.max(0, (p.aggio || 0) / maxVal))
-      const yAgg = height - padBottom - aggRatio * plotHeight
+      const yAgg = baselineY - aggRatio * plotHeight
 
       const winRatio = Math.min(1, Math.max(0, (p.winnings || 0) / maxVal))
-      const yWin = height - padBottom - winRatio * plotHeight
+      const yWin = baselineY - winRatio * plotHeight
 
       return {
         ...p,
@@ -161,21 +725,11 @@ export default function StatisticheView({ t, user }) {
       }
     })
 
-    // Path area sfumata incasso
-    const areaPath = coords.length > 0
-      ? `M ${coords[0].x} ${height - padBottom} ` +
-        coords.map((c) => `L ${c.x} ${c.yRev}`).join(' ') +
-        ` L ${coords[coords.length - 1].x} ${height - padBottom} Z`
-      : ''
-
-    // Path linea incasso lordo
-    const revLinePath = coords.map((c, i) => `${i === 0 ? 'M' : 'L'} ${c.x} ${c.yRev}`).join(' ')
-
-    // Path linea aggio netto 8%
-    const aggLinePath = coords.map((c, i) => `${i === 0 ? 'M' : 'L'} ${c.x} ${c.yAgg}`).join(' ')
-
-    // Path linea vincite pagate
-    const winLinePath = coords.map((c, i) => `${i === 0 ? 'M' : 'L'} ${c.x} ${c.yWin}`).join(' ')
+    // Curve morbide spline (più leggibili ed eleganti dei poligoni a spigoli vivi)
+    const areaPath = createAreaPath(coords, 'yRev', baselineY)
+    const revLinePath = createSmoothPath(coords, 'yRev')
+    const aggLinePath = createSmoothPath(coords, 'yAgg')
+    const winLinePath = createSmoothPath(coords, 'yWin')
 
     return {
       width,
@@ -184,7 +738,9 @@ export default function StatisticheView({ t, user }) {
       padRight,
       padTop,
       padBottom,
+      baselineY,
       maxVal,
+      isZeroState,
       coords,
       gridLines,
       areaPath,
@@ -267,7 +823,8 @@ export default function StatisticheView({ t, user }) {
                 <line x1="8" y1="2" x2="8" y2="6" />
                 <line x1="3" y1="10" x2="21" y2="10" />
               </svg>
-              <span className="stats-date-text">{displayedPeriodLabel}</span>
+              <span className="stats-date-text desktop-label">{displayedPeriodLabel}</span>
+              <span className="stats-date-text mobile-label">{shortPeriodLabel}</span>
             </div>
 
             <button
@@ -482,9 +1039,33 @@ export default function StatisticheView({ t, user }) {
           </div>
         </div>
 
-        {/* Grafico SVG Responsivo con Griglia e Tooltip */}
-        <div className="stats-chart-viewport-wrapper">
+        {/* Grafico SVG Responsivo con Griglia, Stato Vuoto e Tooltip */}
+        <div className={`stats-chart-viewport-wrapper ${period === 'month' ? 'scrollable-month' : ''}`}>
+          {period === 'month' && (
+            <div className="stats-mobile-scroll-hint" aria-hidden="true">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="17 11 21 15 17 19" />
+                <line x1="21" y1="15" x2="9" y2="15" />
+                <polyline points="7 13 3 9 7 5" />
+                <line x1="3" y1="9" x2="15" y2="9" />
+              </svg>
+              <span>Scorri in orizzontale per consultare tutti i giorni del mese</span>
+            </div>
+          )}
+
           <div className="stats-svg-container">
+            {/* Avviso discreto se nel periodo selezionato non ci sono ancora vendite (es. inizio giornata) */}
+            {chartConfig.isZeroState && !isLoading && (
+              <div className="stats-chart-zero-hint" role="status">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#0F6B4F" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="12" y1="8" x2="12" y2="12" />
+                  <line x1="12" y1="16" x2="12.01" y2="16" />
+                </svg>
+                <span>Nessuna vendita registrata nel periodo selezionato</span>
+              </div>
+            )}
+
             <svg
               className="stats-trend-svg"
               viewBox={`0 0 ${chartConfig.width} ${chartConfig.height}`}
@@ -494,13 +1075,13 @@ export default function StatisticheView({ t, user }) {
               <defs>
                 {/* Gradiente sfumato verde sotto l'incasso */}
                 <linearGradient id="statsGreenGradient" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#0F6B4F" stopOpacity="0.22" />
-                  <stop offset="85%" stopColor="#0F6B4F" stopOpacity="0.03" />
+                  <stop offset="0%" stopColor="#0F6B4F" stopOpacity="0.20" />
+                  <stop offset="85%" stopColor="#0F6B4F" stopOpacity="0.02" />
                   <stop offset="100%" stopColor="#0F6B4F" stopOpacity="0" />
                 </linearGradient>
               </defs>
 
-              {/* Linee orizzontali di riferimento con importi in euro */}
+              {/* Linee orizzontali di riferimento con importi in euro tondi e puliti */}
               {chartConfig.gridLines.map((g, idx) => (
                 <g key={idx}>
                   <line
@@ -530,7 +1111,7 @@ export default function StatisticheView({ t, user }) {
                 <path d={chartConfig.areaPath} fill="url(#statsGreenGradient)" />
               )}
 
-              {/* Curva Vincite (se attivata) */}
+              {/* Curva Vincite (se attivata) con spline morbida */}
               {showWinningsCurve && chartConfig.winLinePath && (
                 <path
                   d={chartConfig.winLinePath}
@@ -539,28 +1120,29 @@ export default function StatisticheView({ t, user }) {
                   strokeWidth="2"
                   strokeDasharray="4 4"
                   strokeLinecap="round"
+                  strokeLinejoin="round"
                 />
               )}
 
-              {/* Curva Incasso Lordo */}
+              {/* Curva Incasso Lordo fluida */}
               {chartConfig.revLinePath && (
                 <path
                   d={chartConfig.revLinePath}
                   fill="none"
                   stroke="#0F6B4F"
-                  strokeWidth="2.6"
+                  strokeWidth="2.8"
                   strokeLinecap="round"
                   strokeLinejoin="round"
                 />
               )}
 
-              {/* Curva Aggio 8% */}
+              {/* Curva Aggio 8% fluida */}
               {chartConfig.aggLinePath && (
                 <path
                   d={chartConfig.aggLinePath}
                   fill="none"
                   stroke="#F5C400"
-                  strokeWidth="2.2"
+                  strokeWidth="2.4"
                   strokeLinecap="round"
                   strokeLinejoin="round"
                 />
@@ -579,7 +1161,7 @@ export default function StatisticheView({ t, user }) {
                 />
               )}
 
-              {/* Punti dati e aree di cattura mouse */}
+              {/* Punti dati e aree di cattura mouse/touch */}
               {chartConfig.coords.map((pt, idx) => {
                 const isHovered = hoveredPointIndex === idx
                 return (
@@ -588,12 +1170,13 @@ export default function StatisticheView({ t, user }) {
                     className="stats-chart-point-group"
                     onMouseEnter={() => setHoveredPointIndex(idx)}
                     onMouseLeave={() => setHoveredPointIndex(null)}
+                    onClick={() => setHoveredPointIndex(isHovered ? null : idx)}
                   >
                     {/* Cerchietto punto incasso */}
                     <circle
                       cx={pt.x}
                       cy={pt.yRev}
-                      r={isHovered ? 5.5 : pt.revenue > 0 ? 3.5 : 2}
+                      r={isHovered ? 5.5 : pt.revenue > 0 ? 3.5 : 2.5}
                       fill="#ffffff"
                       stroke="#0F6B4F"
                       strokeWidth={isHovered ? 2.5 : 2}
@@ -623,7 +1206,7 @@ export default function StatisticheView({ t, user }) {
                       />
                     )}
 
-                    {/* Area invisibile allargata per facilitare l'hover */}
+                    {/* Area invisibile allargata per facilitare hover e tap */}
                     <rect
                       x={pt.x - (chartConfig.width / (chartConfig.coords.length * 2))}
                       y={chartConfig.padTop}
@@ -633,15 +1216,15 @@ export default function StatisticheView({ t, user }) {
                       style={{ cursor: 'pointer' }}
                     />
 
-                    {/* Etichette asse X (mostrate in base al periodo per non sovrapporsi) */}
+                    {/* Etichette asse X (mostrate con diradamento pulito nel mese) */}
                     {(period === 'day' ||
                       period === 'year' ||
                       (period === 'month' && (idx % 2 === 0 || idx === chartConfig.coords.length - 1))) && (
                       <text
                         x={pt.x}
-                        y={chartConfig.height - chartConfig.padBottom + 18}
+                        y={chartConfig.height - chartConfig.padBottom + 20}
                         textAnchor="middle"
-                        fontSize={period === 'month' ? '10' : '11'}
+                        fontSize={period === 'month' ? '10' : '11.5'}
                         fontWeight={isHovered ? '700' : '600'}
                         fill={isHovered ? '#0F6B4F' : '#738379'}
                       >
@@ -653,13 +1236,13 @@ export default function StatisticheView({ t, user }) {
               })}
             </svg>
 
-            {/* Tooltip flottante dinamico al passaggio del mouse */}
+            {/* Tooltip flottante dinamico ancorato e vincolato ai margini per mobile */}
             {hoveredPointIndex !== null && chartConfig.coords[hoveredPointIndex] && (
               <div
                 className="stats-chart-tooltip"
                 style={{
-                  left: `${(chartConfig.coords[hoveredPointIndex].x / chartConfig.width) * 100}%`,
-                  top: `${Math.max(10, (chartConfig.coords[hoveredPointIndex].yRev / chartConfig.height) * 100 - 32)}%`,
+                  left: `${Math.max(16, Math.min(84, (chartConfig.coords[hoveredPointIndex].x / chartConfig.width) * 100))}%`,
+                  top: `${Math.max(8, (chartConfig.coords[hoveredPointIndex].yRev / chartConfig.height) * 100 - 24)}%`,
                 }}
               >
                 <div className="stats-tooltip-title">
@@ -711,7 +1294,8 @@ export default function StatisticheView({ t, user }) {
             </div>
           ) : (
             <div className="stats-tier-table-wrapper">
-              <table className="stats-tier-table">
+              {/* Tabella Standard per Desktop / Schermi Grandi */}
+              <table className="stats-tier-table stats-tier-table-desktop">
                 <thead>
                   <tr>
                     <th style={{ textAlign: 'left' }}>Taglio</th>
@@ -758,6 +1342,40 @@ export default function StatisticheView({ t, user }) {
                   })}
                 </tbody>
               </table>
+
+              {/* Vista Mobile Cards ad alta leggibilità (niente scrolling orizzontale forzato su phone) */}
+              <div className="stats-tier-mobile-list" aria-label="Elenco fasce di prezzo">
+                {stats.tierStats.map((tier) => {
+                  const priceFormatted = Number(tier.price).toFixed(2).replace('.', ',')
+                  const shareNum = Number(tier.percentageShare || 0)
+
+                  return (
+                    <div key={tier.price} className="stats-tier-mobile-card">
+                      <div className="stats-tier-mobile-top">
+                        <div className="stats-tier-badge">
+                          <strong>€ {priceFormatted}</strong>
+                        </div>
+                        <div className="stats-tier-mobile-amounts">
+                          <span className="stats-tier-mobile-rev">{formatEuro(tier.revenue)}</span>
+                          <span className="stats-tier-mobile-agg">+{formatEuro(tier.aggio)} aggio</span>
+                        </div>
+                      </div>
+                      <div className="stats-tier-mobile-bottom">
+                        <span className="stats-tier-qty">{formatNumber(tier.ticketsSold)} pz venduti</span>
+                        <div className="stats-share-bar-cell">
+                          <div className="stats-progress-track">
+                            <div
+                              className="stats-progress-fill"
+                              style={{ width: `${Math.min(100, Math.max(shareNum > 0 ? 4 : 0, shareNum))}%` }}
+                            />
+                          </div>
+                          <span className="stats-share-text">{shareNum.toFixed(1)}%</span>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
             </div>
           )}
         </section>
@@ -857,6 +1475,24 @@ export default function StatisticheView({ t, user }) {
             </div>
           </div>
         </section>
+      </div>
+
+      {/* ── TASTO IN FONDO ALLA PAGINA LUNGO QUANTO LA SCHERMATA IN ORIZZONTALE ── */}
+      <div className="stats-fullwidth-action-wrap">
+        <button
+          type="button"
+          className="stats-btn-fullwidth-pdf"
+          onClick={handlePrintPdf}
+          id="btn-stampa-pdf-statistiche"
+          title="Genera ed esporta il documento PDF con tutte le statistiche pronto da stampare"
+        >
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <polyline points="6 9 6 2 18 2 18 9" />
+            <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+            <rect x="6" y="14" width="12" height="8" />
+          </svg>
+          <span>Stampa / Esporta Report PDF Statistiche</span>
+        </button>
       </div>
     </div>
   )

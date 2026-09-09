@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react'
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { api } from '../services/api.js'
 
 // Specifiche confezionamento stecche: numero fisso di biglietti per stecca
@@ -56,9 +56,84 @@ export function isDateInCurrentSteccheWeek(dateStr) {
   return d >= start && d <= end
 }
 
+/**
+ * Aggrega le transazioni dello storico che avvengono nello stesso minuto
+ * per la stessa operazione (stesso tipo, stesso taglio di prezzo o vincita).
+ * Ad esempio, 4 aggiunte da € 5 alle 16:25 vengono aggregate in una sola riga da +4 da € 5 (€ 20,00).
+ */
+export function aggregateHistory(items) {
+  if (!Array.isArray(items) || items.length === 0) return []
+
+  const groups = []
+  const groupMap = new Map()
+
+  for (const item of items) {
+    const rawTime = String(item.time || '').trim()
+    const timeKey = rawTime.length >= 5 ? rawTime.slice(0, 5) : rawTime
+    const typeKey = item.type || ''
+    const priceKey = item.price != null && !isNaN(Number(item.price))
+      ? Number(item.price).toFixed(2)
+      : ''
+    const tierKey = item.tier || ''
+    const amountKey = (item.type === 'win' || item.type === 'closing') && item.amount != null
+      ? Number(item.amount).toFixed(2)
+      : ''
+
+    const groupKey = `${timeKey}|${typeKey}|${priceKey}|${tierKey}|${amountKey}`
+
+    if (groupMap.has(groupKey)) {
+      const existing = groupMap.get(groupKey)
+      existing.qty = (existing.qty || 0) + (item.qty || 1)
+      existing.amount = Number(((existing.amount || 0) + (item.amount || 0)).toFixed(2))
+      if (item.id != null) {
+        existing.ids.push(item.id)
+      }
+    } else {
+      const newItem = {
+        ...item,
+        groupKey,
+        time: timeKey,
+        qty: item.qty || 1,
+        amount: Number((item.amount || 0).toFixed(2)),
+        ids: item.id != null ? [item.id] : [],
+      }
+      groupMap.set(groupKey, newItem)
+      groups.push(newItem)
+    }
+  }
+
+  return groups.map((item) => {
+    let label = item.label
+    if (item.type === 'gv_add') {
+      label = item.qty === 1
+        ? `+1 biglietto da € ${item.price}`
+        : `+${item.qty} biglietti da € ${item.price}`
+    } else if (item.type === 'gv_sub') {
+      label = item.qty === 1
+        ? `–1 storno da € ${item.price}`
+        : `–${item.qty} storni da € ${item.price}`
+    } else if (item.type === 'win') {
+      label = item.qty === 1
+        ? `Vincita · Biglietto ${item.tier}`
+        : `${item.qty} vincite · Biglietto ${item.tier}`
+    }
+
+    return {
+      ...item,
+      label,
+    }
+  })
+}
+
 export default function GrattaEVinciView({ t, user }) {
   // Stato sincronizzazione database cloud
   const [syncStatus, setSyncStatus] = useState('idle') // 'idle' | 'syncing' | 'synced' | 'offline'
+
+  // Semaforo, accumulatore batch e timer per mutazioni vendite rapide senza sfarfallio
+  const pendingSalesDeltaRef = useRef({})
+  const debounceTimerRef = useRef(null)
+  const lastMutationTimeRef = useRef(0)
+  const isMutating = useRef(false)
 
   // Switch tabella: 'sales' (Vendite di oggi) | 'purchases' (Acquistati a stecche)
   const [activeTableTab, setActiveTableTab] = useState('sales')
@@ -73,63 +148,17 @@ export default function GrattaEVinciView({ t, user }) {
   const [purchaseSuccess, setPurchaseSuccess] = useState('')
   const [purchaseError, setPurchaseError] = useState('')
 
-  // Di base nella pagina non sono presenti taglie di gratta e vinci predefinite (aggiunte dal gestore)
-  const defaultPrices = []
+  // Fasce di prezzo attive (caricate dal DB)
+  const [priceTiers, setPriceTiers] = useState([])
 
-  // Fasce di prezzo attive (vuoto di base)
-  const [priceTiers, setPriceTiers] = useState(() => {
-    try {
-      const saved = localStorage.getItem('gv_price_tiers')
-      if (saved) {
-        const parsed = JSON.parse(saved)
-        if (Array.isArray(parsed)) {
-          return parsed.sort((a, b) => a - b)
-        }
-      }
-    } catch (e) {
-      console.error('Errore lettura priceTiers da localStorage', e)
-    }
-    return defaultPrices
-  })
+  // Vendite odierne per ciascun prezzo (caricate dal DB)
+  const [salesByPrice, setSalesByPrice] = useState({})
 
-  // Vendite odierne per ciascun prezzo (vuoto di base)
-  const [salesByPrice, setSalesByPrice] = useState(() => {
-    try {
-      const saved = localStorage.getItem('gv_sales_today')
-      if (saved) {
-        return JSON.parse(saved)
-      }
-    } catch (e) {
-      console.error('Errore lettura salesByPrice da localStorage', e)
-    }
-    return {}
-  })
+  // Vincite emesse oggi (caricate dal DB)
+  const [winnings, setWinnings] = useState([])
 
-  // Vincite emesse oggi (vuoto di base)
-  const [winnings, setWinnings] = useState(() => {
-    try {
-      const saved = localStorage.getItem('gv_winnings_today')
-      if (saved) {
-        return JSON.parse(saved)
-      }
-    } catch (e) {
-      console.error('Errore lettura vincite da localStorage', e)
-    }
-    return []
-  })
-
-  // Storico odierno: Ultimi Gratta e Vinci aggiunti / battuti, storni e vincite (vuoto di base)
-  const [historyLog, setHistoryLog] = useState(() => {
-    try {
-      const saved = localStorage.getItem('gv_history_log_v2')
-      if (saved) {
-        return JSON.parse(saved)
-      }
-    } catch (e) {
-      console.error('Errore lettura historyLog da localStorage', e)
-    }
-    return []
-  })
+  // Storico odierno: Ultimi Gratta e Vinci aggiunti / battuti, storni e vincite (caricato dal DB)
+  const [historyLog, setHistoryLog] = useState([])
 
   // Data odierna formattata in italiano
   const todayFormatted = useMemo(() => {
@@ -170,38 +199,8 @@ export default function GrattaEVinciView({ t, user }) {
   const [dailyTotalMode, setDailyTotalMode] = useState('replace') // 'replace' | 'append'
   const [dailyTotalNote, setDailyTotalNote] = useState('Chiusura serale terminale')
 
-  // Salvataggio su localStorage
-  useEffect(() => {
-    try {
-      localStorage.setItem('gv_price_tiers', JSON.stringify(priceTiers))
-    } catch (e) {
-      console.error(e)
-    }
-  }, [priceTiers])
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('gv_sales_today', JSON.stringify(salesByPrice))
-    } catch (e) {
-      console.error(e)
-    }
-  }, [salesByPrice])
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('gv_winnings_today', JSON.stringify(winnings))
-    } catch (e) {
-      console.error(e)
-    }
-  }, [winnings])
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('gv_history_log_v2', JSON.stringify(historyLog))
-    } catch (e) {
-      console.error(e)
-    }
-  }, [historyLog])
+  // NOTA: localStorage non viene più usato come fonte di verità.
+  // Tutti i dati vengono caricati dal backend (DB) e aggiornati con re-fetch dopo ogni mutazione.
 
   // Reset pagination on filter change in modal
   useEffect(() => {
@@ -210,18 +209,43 @@ export default function GrattaEVinciView({ t, user }) {
 
   // Caricamento dei dati dal backend con polling automatico ogni 15 secondi (multi-dispositivo)
   const loadDataFromDb = useCallback(async (isSilent = false) => {
+    // Non sovrascrivere lo stato se c'è un batch in attesa o se una mutazione è attiva
+    const hasPendingDelta = Object.values(pendingSalesDeltaRef.current || {}).some((d) => d !== 0)
+    if (isMutating.current || hasPendingDelta || (Date.now() - lastMutationTimeRef.current < 600)) {
+      return
+    }
+
+    const fetchStartTime = Date.now()
+
     try {
       if (!isSilent) setSyncStatus('syncing')
 
+      // Fetch PARALLELO per massima velocità e atomicità (evita re-render intermedi sfasati)
+      const [backendTiers, backendSales, backendWins, backendTransactions, backendPurchases] = await Promise.all([
+        api.gv.getPriceTiers(),
+        api.gv.getSalesToday(),
+        api.gv.getWinningsToday(),
+        api.gv.getTransactionsToday(),
+        api.gv.getPurchases(),
+      ])
+
+      // Se durante il fetch è iniziata un'azione dell'utente, scarta i dati obsoleti senza toccare lo stato locale
+      const mutationHappenedDuringFetch =
+        isMutating.current ||
+        Object.values(pendingSalesDeltaRef.current || {}).some((d) => d !== 0) ||
+        lastMutationTimeRef.current > fetchStartTime
+
+      if (mutationHappenedDuringFetch) {
+        return
+      }
+
       // 1. Fasce di prezzo
-      const backendTiers = await api.gv.getPriceTiers()
       if (Array.isArray(backendTiers)) {
         const prices = backendTiers.map((t) => Number(t.price)).sort((a, b) => a - b)
         setPriceTiers(prices)
       }
 
       // 2. Vendite odierne
-      const backendSales = await api.gv.getSalesToday()
       if (Array.isArray(backendSales)) {
         const salesMap = {}
         backendSales.forEach((s) => {
@@ -231,7 +255,6 @@ export default function GrattaEVinciView({ t, user }) {
       }
 
       // 3. Vincite odierne
-      const backendWins = await api.gv.getWinningsToday()
       if (Array.isArray(backendWins)) {
         const formattedWins = backendWins.map((w) => ({
           id: w.id,
@@ -245,7 +268,6 @@ export default function GrattaEVinciView({ t, user }) {
       }
 
       // 4. Storico odierno
-      const backendTransactions = await api.gv.getTransactionsToday()
       if (Array.isArray(backendTransactions)) {
         const formattedLog = backendTransactions.map((t) => ({
           id: t.id,
@@ -261,7 +283,6 @@ export default function GrattaEVinciView({ t, user }) {
       }
 
       // 5. Forniture caricate dal database (conteggi attivi filtrati sulla settimana con reset domenica)
-      const backendPurchases = await api.gv.getPurchases()
       if (Array.isArray(backendPurchases)) {
         setPurchasesList(backendPurchases)
         const counts = {}
@@ -291,7 +312,7 @@ export default function GrattaEVinciView({ t, user }) {
     }
   }, [])
 
-  // Caricamento iniziale e polling automatico ogni 15s per aggiornamenti da diversi dispositivi
+  // Caricamento iniziale e polling automatico ogni 15s per sincronizzazione multi-dispositivo
   useEffect(() => {
     loadDataFromDb(false)
 
@@ -299,134 +320,132 @@ export default function GrattaEVinciView({ t, user }) {
       loadDataFromDb(true)
     }, 15000)
 
-    return () => clearInterval(intervalId)
+    return () => {
+      clearInterval(intervalId)
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current)
+      }
+    }
   }, [loadDataFromDb, user])
 
-  // Reset delle vendite del giorno seguente con conferma
+  // Reset delle vendite del giorno seguente con conferma — database-first con rollback
   const handleConfirmResetSales = async () => {
-    try {
-      const zeroed = {}
-      priceTiers.forEach((p) => {
-        zeroed[p] = 0
-      })
-      setSalesByPrice(zeroed)
-      localStorage.setItem('gv_sales_today', JSON.stringify(zeroed))
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current)
+    }
+    pendingSalesDeltaRef.current = {}
 
+    const prevSales = { ...salesByPrice }
+
+    // Optimistic update
+    const zeroed = {}
+    priceTiers.forEach((p) => {
+      zeroed[p] = 0
+    })
+    setSalesByPrice(zeroed)
+
+    isMutating.current = true
+    lastMutationTimeRef.current = Date.now()
+    try {
       await api.gv.resetSalesToday()
+      setSyncStatus('synced')
     } catch (err) {
       console.warn('Errore azzeramento vendite DB:', err)
+      setSyncStatus('offline')
+      // Rollback allo stato precedente
+      setSalesByPrice(prevSales)
     } finally {
+      isMutating.current = false
+      lastMutationTimeRef.current = Date.now()
       setShowResetConfirmModal(false)
+      loadDataFromDb(true)
     }
   }
 
-  // Modifica vendite con scaglioni (+1, +5, -1) con AGGREGAZIONE SIA PER AGGIUNTE SIA PER STORNI
+  // Modifica vendite con scaglioni (+1, +5, -1) — database-first con optimistic update immediato e debouncing batch anti-flicker
   const handleUpdateCount = (price, delta) => {
     const now = new Date()
     const timeFormatted = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+    lastMutationTimeRef.current = Date.now()
 
+    // 1. Optimistic update IMMEDIATO dei conteggi vendite (Zero ritardo interfaccia, 60fps)
     setSalesByPrice((prev) => {
       const current = prev[price] || 0
       const next = Math.max(0, current + delta)
-
-      // Aggiorna lo storico odierno con aggregazione nello stesso minuto
-      setHistoryLog((hPrev) => {
-        if (delta > 0) {
-          // ── AGGIUNTE: Cerca se esiste già un'aggiunta per lo stesso prezzo nello stesso minuto ──
-          const existingIndex = hPrev.findIndex(
-            (item) => item.time === timeFormatted && item.type === 'gv_add' && item.price === price
-          )
-
-          if (existingIndex !== -1) {
-            const existing = hPrev[existingIndex]
-            const updatedQty = (existing.qty || 1) + delta
-            const updatedAmount = price * updatedQty
-            const updatedItem = {
-              ...existing,
-              qty: updatedQty,
-              amount: updatedAmount,
-              label: `+${updatedQty} bigliett${updatedQty === 1 ? 'o' : 'i'} da € ${price}`,
-            }
-
-            const remaining = hPrev.filter((_, idx) => idx !== existingIndex)
-            return [updatedItem, ...remaining]
-          } else {
-            const newHistoryItem = {
-              id: `h-gv-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-              time: timeFormatted,
-              type: 'gv_add',
-              price: price,
-              qty: delta,
-              amount: price * delta,
-              label: delta === 1 ? `+1 biglietto da € ${price}` : `+${delta} biglietti da € ${price}`,
-            }
-            return [newHistoryItem, ...hPrev]
-          }
-        } else if (delta < 0 && current > 0) {
-          // ── STORNI: Cerca se esiste già uno storno per lo stesso prezzo nello stesso minuto ──
-          const existingStornoIndex = hPrev.findIndex(
-            (item) => item.time === timeFormatted && item.type === 'gv_sub' && item.price === price
-          )
-
-          if (existingStornoIndex !== -1) {
-            // Aggrega gli storni nello stesso minuto
-            const existing = hPrev[existingStornoIndex]
-            const updatedQty = (existing.qty || 1) + 1
-            const updatedAmount = price * updatedQty
-            const updatedItem = {
-              ...existing,
-              qty: updatedQty,
-              amount: updatedAmount,
-              label: `–${updatedQty} storn${updatedQty === 1 ? 'o' : 'i'} da € ${price}`,
-            }
-
-            const remaining = hPrev.filter((_, idx) => idx !== existingStornoIndex)
-            return [updatedItem, ...remaining]
-          } else {
-            // Nuovo storno
-            const newStornoItem = {
-              id: `h-gv-sub-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-              time: timeFormatted,
-              type: 'gv_sub',
-              price: price,
-              qty: 1,
-              amount: price,
-              label: `–1 storno da € ${price}`,
-            }
-            return [newStornoItem, ...hPrev]
-          }
-        }
-        return hPrev
-      })
-
-      return {
-        ...prev,
-        [price]: next,
-      }
+      return { ...prev, [price]: next }
     })
 
-    // Sincronizzazione atomica con il database backend
-    api.gv.updateSale(price, delta)
-      .then(() => setSyncStatus('synced'))
-      .catch((err) => {
-        console.warn('Errore salvataggio vendita nel DB:', err)
-        setSyncStatus('offline')
-      })
-
-    api.gv.logTransaction({
+    // 2. Optimistic update IMMEDIATO dello storico odierno
+    const tempId = `h-temp-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`
+    const optimisticHistoryItem = {
+      id: tempId,
+      time: timeFormatted,
       type: delta > 0 ? 'gv_add' : 'gv_sub',
       price: price,
-      quantity: Math.abs(delta),
+      qty: Math.abs(delta),
       amount: price * Math.abs(delta),
       label: delta > 0
         ? (delta === 1 ? `+1 biglietto da € ${price}` : `+${delta} biglietti da € ${price}`)
-        : `–1 storno da € ${price}`,
-      timeRecorded: timeFormatted,
-    }).catch((err) => console.warn('Errore salvataggio transazione nel DB:', err))
+        : (Math.abs(delta) === 1 ? `–1 storno da € ${price}` : `–${Math.abs(delta)} storni da € ${price}`),
+    }
+    setHistoryLog((prev) => [optimisticHistoryItem, ...prev])
+
+    // 3. Accumula il delta per questa fascia di prezzo
+    pendingSalesDeltaRef.current[price] = (pendingSalesDeltaRef.current[price] || 0) + delta
+
+    // 4. Resetta il timer per catturare tutta la raffica di click
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current)
+    }
+
+    // 5. Invia al database in modalità batch una volta terminata la sequenza di click (300ms idle)
+    debounceTimerRef.current = setTimeout(async () => {
+      const deltasToSend = { ...pendingSalesDeltaRef.current }
+      pendingSalesDeltaRef.current = {} // Reset accumulatore
+
+      const entries = Object.entries(deltasToSend).filter(([_, d]) => d !== 0)
+      if (entries.length === 0) return
+
+      isMutating.current = true
+      lastMutationTimeRef.current = Date.now()
+
+      try {
+        const promises = entries.map(([pStr, d]) => {
+          const pNum = Number(pStr)
+          const absQty = Math.abs(d)
+          const nowSend = new Date()
+          const sendTime = `${String(nowSend.getHours()).padStart(2, '0')}:${String(nowSend.getMinutes()).padStart(2, '0')}`
+
+          return Promise.all([
+            api.gv.updateSale(pNum, d),
+            api.gv.logTransaction({
+              type: d > 0 ? 'gv_add' : 'gv_sub',
+              price: pNum,
+              quantity: absQty,
+              amount: pNum * absQty,
+              label: d > 0
+                ? (absQty === 1 ? `+1 biglietto da € ${pNum}` : `+${absQty} biglietti da € ${pNum}`)
+                : (absQty === 1 ? `–1 storno da € ${pNum}` : `–${absQty} storni da € ${pNum}`),
+              timeRecorded: sendTime,
+            }),
+          ])
+        })
+
+        await Promise.all(promises)
+        setSyncStatus('synced')
+      } catch (err) {
+        console.warn('Errore salvataggio vendite batch nel DB:', err)
+        setSyncStatus('offline')
+      } finally {
+        isMutating.current = false
+        lastMutationTimeRef.current = Date.now()
+        loadDataFromDb(true)
+      }
+    }, 300)
   }
 
-  // Aggiungi una nuova fascia di prezzo
-  const handleAddPriceTier = (e) => {
+  // Aggiungi una nuova fascia di prezzo — database-first con rollback
+  const handleAddPriceTier = async (e) => {
     e.preventDefault()
     setPriceError('')
     const priceNum = parseFloat(newPriceInput.replace(',', '.'))
@@ -439,6 +458,10 @@ export default function GrattaEVinciView({ t, user }) {
       return
     }
 
+    const prevTiers = [...priceTiers]
+    const prevSales = { ...salesByPrice }
+
+    // Optimistic update
     const updated = [...priceTiers, priceNum].sort((a, b) => a - b)
     setPriceTiers(updated)
     setSalesByPrice((prev) => ({
@@ -447,34 +470,57 @@ export default function GrattaEVinciView({ t, user }) {
     }))
     setNewPriceInput('')
 
-    // Sincronizza nuova fascia con il DB
-    api.gv.addPriceTier(priceNum)
-      .then(() => setSyncStatus('synced'))
-      .catch((err) => {
-        console.warn('Errore salvataggio fascia nel DB:', err)
-        setSyncStatus('offline')
-      })
+    isMutating.current = true
+    lastMutationTimeRef.current = Date.now()
+    try {
+      await api.gv.addPriceTier(priceNum)
+      setSyncStatus('synced')
+    } catch (err) {
+      console.warn('Errore salvataggio fascia nel DB:', err)
+      setSyncStatus('offline')
+      // Rollback allo stato precedente
+      setPriceTiers(prevTiers)
+      setSalesByPrice(prevSales)
+      setPriceError('Errore durante il salvataggio della fascia nel database')
+    } finally {
+      isMutating.current = false
+      lastMutationTimeRef.current = Date.now()
+      loadDataFromDb(true)
+    }
   }
 
-  // Rimuovi una fascia di prezzo
-  const handleRemovePriceTier = (priceToRemove) => {
+  // Rimuovi una fascia di prezzo — database-first con rollback
+  const handleRemovePriceTier = async (priceToRemove) => {
     if (priceTiers.length <= 1) {
       setPriceError('Deve rimanere almeno una fascia di prezzo attiva')
       return
     }
+
+    const prevTiers = [...priceTiers]
+
+    // Optimistic update
     setPriceTiers((prev) => prev.filter((p) => p !== priceToRemove))
 
-    // Sincronizza rimozione fascia con il DB
-    api.gv.removePriceTier(priceToRemove)
-      .then(() => setSyncStatus('synced'))
-      .catch((err) => {
-        console.warn('Errore rimozione fascia dal DB:', err)
-        setSyncStatus('offline')
-      })
+    isMutating.current = true
+    lastMutationTimeRef.current = Date.now()
+    try {
+      await api.gv.removePriceTier(priceToRemove)
+      setSyncStatus('synced')
+    } catch (err) {
+      console.warn('Errore rimozione fascia dal DB:', err)
+      setSyncStatus('offline')
+      // Rollback allo stato precedente
+      setPriceTiers(prevTiers)
+      setPriceError('Errore durante la rimozione della fascia nel database')
+    } finally {
+      isMutating.current = false
+      lastMutationTimeRef.current = Date.now()
+      loadDataFromDb(true)
+    }
   }
 
-  // Registra nuova vincita singola
-  const handleAddSingleWinning = (e) => {
+  // Registra nuova vincita singola — database-first con rollback
+  const handleAddSingleWinning = async (e) => {
     e.preventDefault()
     setWinError('')
     const amountNum = parseFloat(winAmount.replace(',', '.'))
@@ -487,6 +533,10 @@ export default function GrattaEVinciView({ t, user }) {
     const timeFormatted = winCustomTime.trim() || 
       `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
 
+    const prevWinnings = [...winnings]
+    const prevHistory = [...historyLog]
+
+    // Optimistic update
     const newWin = {
       id: `w-${Date.now()}`,
       time: timeFormatted,
@@ -494,7 +544,6 @@ export default function GrattaEVinciView({ t, user }) {
       tier: winTier,
       type: 'single',
     }
-
     const newHistoryWin = {
       id: `h-w-${Date.now()}`,
       time: timeFormatted,
@@ -503,36 +552,46 @@ export default function GrattaEVinciView({ t, user }) {
       tier: winTier,
       label: `Vincita · Biglietto ${winTier}`,
     }
-
     setWinnings((prev) => [newWin, ...prev])
     setHistoryLog((prev) => [newHistoryWin, ...prev])
     setWinAmount('')
     setShowWinModal(false)
 
-    // Sincronizza vincita e log col DB
-    api.gv.addWinning({
-      amount: amountNum,
-      tier: winTier,
-      type: 'single',
-      timeRecorded: timeFormatted,
-    })
-      .then(() => setSyncStatus('synced'))
-      .catch((err) => {
-        console.warn('Errore salvataggio vincita nel DB:', err)
-        setSyncStatus('offline')
-      })
-
-    api.gv.logTransaction({
-      type: 'win',
-      amount: amountNum,
-      tier: winTier,
-      label: `Vincita · Biglietto ${winTier}`,
-      timeRecorded: timeFormatted,
-    }).catch((err) => console.warn('Errore salvataggio log vincita nel DB:', err))
+    isMutating.current = true
+    lastMutationTimeRef.current = Date.now()
+    try {
+      await Promise.all([
+        api.gv.addWinning({
+          amount: amountNum,
+          tier: winTier,
+          type: 'single',
+          timeRecorded: timeFormatted,
+        }),
+        api.gv.logTransaction({
+          type: 'win',
+          amount: amountNum,
+          tier: winTier,
+          label: `Vincita · Biglietto ${winTier}`,
+          timeRecorded: timeFormatted,
+        }),
+      ])
+      setSyncStatus('synced')
+    } catch (err) {
+      console.warn('Errore salvataggio vincita nel DB:', err)
+      setSyncStatus('offline')
+      // Rollback allo stato precedente
+      setWinnings(prevWinnings)
+      setHistoryLog(prevHistory)
+      setWinError('Errore durante il salvataggio della vincita nel database')
+    } finally {
+      isMutating.current = false
+      lastMutationTimeRef.current = Date.now()
+      loadDataFromDb(true)
+    }
   }
 
-  // Registra totale vincite a fine giornata (chiusura)
-  const handleAddDailyTotalWinning = (e) => {
+  // Registra totale vincite a fine giornata (chiusura) — database-first con rollback
+  const handleAddDailyTotalWinning = async (e) => {
     e.preventDefault()
     setWinError('')
     const amountNum = parseFloat(dailyTotalAmount.replace(',', '.'))
@@ -544,6 +603,10 @@ export default function GrattaEVinciView({ t, user }) {
     const now = new Date()
     const timeFormatted = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
 
+    const prevWinnings = [...winnings]
+    const prevHistory = [...historyLog]
+
+    // Optimistic update
     const closingEntry = {
       id: `w-closing-${Date.now()}`,
       time: timeFormatted,
@@ -551,7 +614,6 @@ export default function GrattaEVinciView({ t, user }) {
       tier: dailyTotalNote.trim() || 'Chiusura terminale',
       type: 'closing',
     }
-
     const closingHistoryItem = {
       id: `h-closing-${Date.now()}`,
       time: timeFormatted,
@@ -560,49 +622,86 @@ export default function GrattaEVinciView({ t, user }) {
       label: 'Chiusura serale terminale',
       tier: dailyTotalNote.trim() || 'Chiusura terminale',
     }
-
     if (dailyTotalMode === 'replace') {
       setWinnings([closingEntry])
     } else {
       setWinnings((prev) => [closingEntry, ...prev])
     }
-
     setHistoryLog((prev) => [closingHistoryItem, ...prev])
     setDailyTotalAmount('')
     setShowWinModal(false)
 
-    // Sincronizza chiusura vincite col DB
-    api.gv.addWinning({
-      amount: amountNum,
-      tier: dailyTotalNote.trim() || 'Chiusura terminale',
-      type: 'closing',
-      mode: dailyTotalMode,
-      timeRecorded: timeFormatted,
-      note: dailyTotalNote.trim() || 'Chiusura terminale',
-    })
-      .then(() => setSyncStatus('synced'))
-      .catch((err) => {
-        console.warn('Errore salvataggio chiusura vincite nel DB:', err)
-        setSyncStatus('offline')
-      })
-
-    api.gv.logTransaction({
-      type: 'closing',
-      amount: amountNum,
-      tier: dailyTotalNote.trim() || 'Chiusura terminale',
-      label: 'Chiusura serale terminale',
-      timeRecorded: timeFormatted,
-    }).catch((err) => console.warn('Errore salvataggio log chiusura nel DB:', err))
+    isMutating.current = true
+    lastMutationTimeRef.current = Date.now()
+    try {
+      await Promise.all([
+        api.gv.addWinning({
+          amount: amountNum,
+          tier: dailyTotalNote.trim() || 'Chiusura terminale',
+          type: 'closing',
+          mode: dailyTotalMode,
+          timeRecorded: timeFormatted,
+          note: dailyTotalNote.trim() || 'Chiusura terminale',
+        }),
+        api.gv.logTransaction({
+          type: 'closing',
+          amount: amountNum,
+          tier: dailyTotalNote.trim() || 'Chiusura terminale',
+          label: 'Chiusura serale terminale',
+          timeRecorded: timeFormatted,
+        }),
+      ])
+      setSyncStatus('synced')
+    } catch (err) {
+      console.warn('Errore salvataggio chiusura serale nel DB:', err)
+      setSyncStatus('offline')
+      // Rollback allo stato precedente
+      setWinnings(prevWinnings)
+      setHistoryLog(prevHistory)
+      setWinError('Errore durante il salvataggio della chiusura nel database')
+    } finally {
+      isMutating.current = false
+      lastMutationTimeRef.current = Date.now()
+      loadDataFromDb(true)
+    }
   }
 
-  // Rimuovi voce dallo storico odierno
-  const handleRemoveHistoryItem = (id) => {
-    setHistoryLog((prev) => prev.filter((item) => item.id !== id))
-    setWinnings((prev) => prev.filter((w) => w.id !== id))
+  // Rimuovi voce dallo storico odierno — database-first con rollback (supporta eliminazione multipla se aggregata)
+  const handleRemoveHistoryItem = async (id, ids) => {
+    const prevHistory = [...historyLog]
+    const prevWinnings = [...winnings]
 
-    if (typeof id === 'number' || (!isNaN(Number(id)) && !String(id).startsWith('h-') && !String(id).startsWith('w-'))) {
-      api.gv.deleteTransaction(id).catch((err) => console.warn('Errore rimozione transazione DB:', err))
-      api.gv.deleteWinning(id).catch((err) => console.warn('Errore rimozione vincita DB:', err))
+    const targetIds = Array.isArray(ids) && ids.length > 0 ? ids : [id]
+    const targetIdsSet = new Set(targetIds.map(String))
+
+    // Optimistic update
+    setHistoryLog((prev) => prev.filter((item) => !targetIdsSet.has(String(item.id))))
+    setWinnings((prev) => prev.filter((w) => !targetIdsSet.has(String(w.id))))
+
+    const validDbIds = targetIds.filter(
+      (singleId) => typeof singleId === 'number' || (!isNaN(Number(singleId)) && !String(singleId).startsWith('h-') && !String(singleId).startsWith('w-'))
+    )
+
+    if (validDbIds.length > 0) {
+      isMutating.current = true
+      lastMutationTimeRef.current = Date.now()
+      try {
+        const deletePromises = []
+        for (const dbId of validDbIds) {
+          deletePromises.push(api.gv.deleteTransaction(dbId))
+          deletePromises.push(api.gv.deleteWinning(dbId))
+        }
+        await Promise.allSettled(deletePromises)
+      } catch (err) {
+        console.warn('Errore rimozione dal DB:', err)
+        // Rollback allo stato precedente
+        setHistoryLog(prevHistory)
+        setWinnings(prevWinnings)
+      } finally {
+        isMutating.current = false
+        lastMutationTimeRef.current = Date.now()
+        loadDataFromDb(true)
+      }
     }
   }
 
@@ -620,6 +719,8 @@ export default function GrattaEVinciView({ t, user }) {
 
   // Stepper stecche: SALVATAGGIO IMMEDIATO NEL DATABASE (Ogni aggiunta o storno aggiorna il DB)
   const handleUpdateSteccheCount = async (price, delta) => {
+    const prevCounts = { ...steccheCounts }
+
     // 1. Aggiorna ottimisticamente il conteggio a video
     setSteccheCounts((prev) => {
       const current = prev[price] || 0
@@ -629,6 +730,8 @@ export default function GrattaEVinciView({ t, user }) {
     setPurchaseError('')
     setPurchaseSuccess('')
 
+    isMutating.current = true
+    lastMutationTimeRef.current = Date.now()
     try {
       // 2. Chiama l'endpoint per salvare immediatamente la stecca nel database
       await api.gv.updateStecca(price, delta)
@@ -669,6 +772,11 @@ export default function GrattaEVinciView({ t, user }) {
       console.error('Errore registrazione stecca:', err)
       setPurchaseError(err.message || 'Errore durante la registrazione della stecca nel database')
       setSyncStatus('offline')
+      // Rollback allo stato precedente
+      setSteccheCounts(prevCounts)
+    } finally {
+      isMutating.current = false
+      lastMutationTimeRef.current = Date.now()
       loadDataFromDb(true)
     }
   }
@@ -750,21 +858,26 @@ export default function GrattaEVinciView({ t, user }) {
     }
   }
 
+  // Storico aggregato per minuto e per tipo/prezzo (quelli uguali nello stesso minuto vengono unificati)
+  const aggregatedHistoryLog = useMemo(() => {
+    return aggregateHistory(historyLog)
+  }, [historyLog])
+
   // Filtro per la lista dello storico odierno nella card (ordinata cronologicamente decrescente)
   const filteredHistory = useMemo(() => {
-    return historyLog.filter((item) => {
+    return aggregatedHistoryLog.filter((item) => {
       if (historyFilter === 'gv_only') return item.type === 'gv_add' || item.type === 'gv_sub'
       if (historyFilter === 'wins') return item.type === 'win' || item.type === 'closing'
       return true // 'all'
     })
-  }, [historyLog, historyFilter])
+  }, [aggregatedHistoryLog, historyFilter])
 
   // SOLO LE ULTIME 5 TRANSAZIONI per la sidebar
   const displayedHistory = filteredHistory.slice(0, 5)
 
   // Elenco completo per la modale tabellare a pagine
   const allFilteredModalTransactions = useMemo(() => {
-    return historyLog.filter((item) => {
+    return aggregatedHistoryLog.filter((item) => {
       // Filtro per tipologia
       if (modalTypeFilter === 'sales' && item.type !== 'gv_add') return false
       if (modalTypeFilter === 'storni' && item.type !== 'gv_sub') return false
@@ -781,7 +894,7 @@ export default function GrattaEVinciView({ t, user }) {
 
       return true
     })
-  }, [historyLog, modalTypeFilter, modalSearch])
+  }, [aggregatedHistoryLog, modalTypeFilter, modalSearch])
 
   // Paginazione
   const totalPages = Math.max(1, Math.ceil(allFilteredModalTransactions.length / pageSize))
@@ -1268,7 +1381,7 @@ export default function GrattaEVinciView({ t, user }) {
 
                         return (
                           <div
-                            key={item.id}
+                            key={item.groupKey || item.id}
                             className={`gv-history-item ${isGvAdd ? 'is-sale' : ''} ${isGvSub ? 'is-storno' : ''} ${
                               isClosing ? 'is-closing' : ''
                             } ${isWin ? 'is-win' : ''}`}
@@ -1289,18 +1402,18 @@ export default function GrattaEVinciView({ t, user }) {
                               <div className="gv-history-tier">
                                 {isGvAdd && (
                                   <span className="history-type-badge badge-sale">
-                                    +{item.qty} da € {item.price}
+                                    Vendita
                                   </span>
                                 )}
                                 {isGvSub && (
                                   <span className="history-type-badge badge-storno">
-                                    –{item.qty} storno € {item.price}
+                                    Storno
                                   </span>
                                 )}
                                 {isClosing && <span className="history-type-badge badge-closing">Chiusura</span>}
                                 {isWin && (
                                   <span className="history-type-badge badge-win">
-                                    Vincita {item.tier}
+                                    {item.qty > 1 ? `${item.qty}x ` : ''}Vincita
                                   </span>
                                 )}
                                 <span className="history-item-label">{item.label}</span>
@@ -1323,7 +1436,7 @@ export default function GrattaEVinciView({ t, user }) {
                       }}
                       id="btn-mostra-tutte-transazioni"
                     >
-                      Mostra tutte le transazioni ({historyLog.length}) ↗
+                      Mostra tutte le transazioni ({aggregatedHistoryLog.length}) ↗
                     </button>
                   </div>
                 </div>
@@ -1510,7 +1623,7 @@ export default function GrattaEVinciView({ t, user }) {
                   className={`gv-tb-filter-btn ${modalTypeFilter === 'all' ? 'active' : ''}`}
                   onClick={() => setModalTypeFilter('all')}
                 >
-                  Tutte ({historyLog.length})
+                  Tutte ({aggregatedHistoryLog.length})
                 </button>
                 <button
                   type="button"
@@ -1564,7 +1677,7 @@ export default function GrattaEVinciView({ t, user }) {
                       const isWin = item.type === 'win'
 
                       return (
-                        <tr key={item.id} className="table-row-item">
+                        <tr key={item.groupKey || item.id} className="table-row-item">
                           <td>
                             <strong style={{ fontFamily: 'monospace', fontSize: '13px' }}>{item.time}</strong>
                           </td>
@@ -1577,9 +1690,9 @@ export default function GrattaEVinciView({ t, user }) {
                           <td>
                             <div className="table-desc-cell">
                               <span className="desc-main-text">
-                                {isGvAdd && `Biglietto Gratta e Vinci da € ${item.price}`}
-                                {isGvSub && `Storno biglietto da € ${item.price}`}
-                                {isWin && `Pagamento vincita (${item.tier})`}
+                                {isGvAdd && (item.qty > 1 ? `${item.qty} biglietti Gratta e Vinci da € ${item.price}` : `Biglietto Gratta e Vinci da € ${item.price}`)}
+                                {isGvSub && (item.qty > 1 ? `${item.qty} storni biglietti da € ${item.price}` : `Storno biglietto da € ${item.price}`)}
+                                {isWin && (item.qty > 1 ? `${item.qty} vincite (${item.tier})` : `Pagamento vincita (${item.tier})`)}
                                 {isClosing && `Chiusura serale terminale (${item.tier})`}
                               </span>
                             </div>
@@ -1588,7 +1701,7 @@ export default function GrattaEVinciView({ t, user }) {
                             <span className="table-qty-badge">
                               {isGvAdd && `+${item.qty || 1}`}
                               {isGvSub && `–${item.qty || 1}`}
-                              {(isWin || isClosing) && `1`}
+                              {(isWin || isClosing) && `${item.qty || 1}`}
                             </span>
                           </td>
                           <td style={{ textAlign: 'right' }}>
@@ -1606,7 +1719,7 @@ export default function GrattaEVinciView({ t, user }) {
                             <button
                               type="button"
                               className="table-delete-btn"
-                              onClick={() => handleRemoveHistoryItem(item.id)}
+                              onClick={() => handleRemoveHistoryItem(item.id, item.ids)}
                               title="Elimina questa transazione"
                               aria-label="Elimina transazione"
                             >

@@ -12,6 +12,8 @@ import java.time.LocalDateTime;
 @Entity
 @Table(name = "gv_sale", indexes = {
     @Index(name = "idx_gv_sale_tabacchino_date", columnList = "tabacchino_id, sale_date, deleted")
+}, uniqueConstraints = {
+    @UniqueConstraint(name = "uk_tabacchino_gv_sale_date", columnNames = {"tabacchino_id", "price", "sale_date"})
 })
 public class GvSale {
 

@@ -16,6 +16,8 @@ public interface GvSaleRepository extends JpaRepository<GvSale, Long> {
 
     Optional<GvSale> findByTabacchinoIdAndPriceAndSaleDateAndDeletedFalse(Long tabacchinoId, BigDecimal price, LocalDate saleDate);
 
+    Optional<GvSale> findByTabacchinoIdAndPriceAndSaleDate(Long tabacchinoId, BigDecimal price, LocalDate saleDate);
+
     List<GvSale> findByTabacchinoIdAndSaleDateBetweenAndDeletedFalse(Long tabacchinoId, LocalDate start, LocalDate end);
 
     List<GvSale> findByTabacchinoIdAndSaleDateBetween(Long tabacchinoId, LocalDate start, LocalDate end);

@@ -3494,7 +3494,7 @@ button, input, select, textarea {
 .stats-view-container {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 20px;
   width: 100%;
   max-width: 1360px;
   margin: 0 auto;
@@ -3505,9 +3505,9 @@ button, input, select, textarea {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 20px;
+  gap: 16px;
   flex-wrap: wrap;
-  padding-bottom: 4px;
+  padding-bottom: 2px;
 }
 
 .stats-header-titles {
@@ -3523,9 +3523,9 @@ button, input, select, textarea {
   background-color: #eef7f2;
   border: 1px solid #d3e7dc;
   color: var(--color-primary);
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 700;
-  padding: 3px 9px;
+  padding: 3px 8px;
   border-radius: 5px;
   width: fit-content;
   letter-spacing: -0.1px;
@@ -3533,10 +3533,10 @@ button, input, select, textarea {
 
 .stats-main-title {
   font-family: var(--font-sans);
-  font-size: 24px;
+  font-size: 23px;
   font-weight: 800;
   color: var(--color-dark);
-  margin: 4px 0 2px 0;
+  margin: 2px 0 2px 0;
   letter-spacing: -0.4px;
 }
 
@@ -3544,14 +3544,14 @@ button, input, select, textarea {
   font-size: 13px;
   color: #63736b;
   margin: 0;
-  line-height: 1.45;
+  line-height: 1.4;
 }
 
 /* ── Pannello Controlli Temporali (Pills + Navigatore) ─────────────────── */
 .stats-controls-panel {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   flex-wrap: wrap;
 }
 
@@ -3564,7 +3564,7 @@ button, input, select, textarea {
 }
 
 .stats-pill-btn {
-  padding: 6px 14px;
+  padding: 6px 13px;
   border: none;
   background: transparent;
   font-size: 13px;
@@ -3590,7 +3590,7 @@ button, input, select, textarea {
 .stats-date-navigator {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   background: #ffffff;
   border: 1px solid #e1e7e3;
   border-radius: 8px;
@@ -3620,8 +3620,8 @@ button, input, select, textarea {
 .stats-date-badge {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 10px;
+  gap: 7px;
+  padding: 4px 8px;
 }
 
 .stats-date-text {
@@ -3631,8 +3631,16 @@ button, input, select, textarea {
   white-space: nowrap;
 }
 
+.stats-date-text.desktop-label {
+  display: inline;
+}
+
+.stats-date-text.mobile-label {
+  display: none;
+}
+
 .stats-today-btn {
-  padding: 4px 10px;
+  padding: 4px 9px;
   background-color: #f2f7f4;
   border: 1px solid #d3e7dc;
   border-radius: 6px;
@@ -3700,7 +3708,7 @@ button, input, select, textarea {
   cursor: pointer;
 }
 
-/* ── Grid 6 KPI Cards ──────────────────────────────────────────────────── */
+/* ── Grid 6 KPI Cards (Ordinato & Compatto) ───────────────────────────── */
 .stats-kpi-grid {
   display: grid;
   grid-template-columns: repeat(6, 1fr);
@@ -3716,29 +3724,24 @@ button, input, select, textarea {
 @media (max-width: 680px) {
   .stats-kpi-grid {
     grid-template-columns: repeat(2, 1fr);
-  }
-}
-
-@media (max-width: 440px) {
-  .stats-kpi-grid {
-    grid-template-columns: 1fr;
+    gap: 10px;
   }
 }
 
 .stats-kpi-card {
   background: var(--color-surface);
   border: 1px solid #e3e8e5;
-  border-radius: 12px;
-  padding: 16px 16px;
+  border-radius: 10px;
+  padding: 14px 14px;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 1px 4px rgba(23, 23, 23, 0.02);
+  box-shadow: 0 1px 3px rgba(23, 23, 23, 0.02);
   transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .stats-kpi-card:hover {
   border-color: #cbd8d1;
-  box-shadow: 0 2px 8px rgba(15, 107, 79, 0.04);
+  box-shadow: 0 2px 6px rgba(15, 107, 79, 0.04);
 }
 
 .stats-kpi-card.stats-kpi-highlight {
@@ -3751,25 +3754,26 @@ button, input, select, textarea {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
 .stats-kpi-label {
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.4px;
+  letter-spacing: 0.3px;
   color: #6a7c73;
 }
 
 .stats-kpi-icon-wrap {
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
   border-radius: 6px;
   background-color: #eef5f1;
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
 }
 
 .stats-kpi-icon-wrap.icon-primary {
@@ -3781,12 +3785,15 @@ button, input, select, textarea {
 }
 
 .stats-kpi-value {
-  font-size: 22px;
+  font-size: 21px;
   font-weight: 800;
   color: var(--color-dark);
   letter-spacing: -0.4px;
-  margin-bottom: 4px;
+  margin-bottom: 3px;
   line-height: 1.15;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .stats-kpi-value.text-green {
@@ -3802,19 +3809,19 @@ button, input, select, textarea {
 }
 
 .stats-kpi-sub {
-  font-size: 11.5px;
+  font-size: 11px;
   color: #7b8c84;
   font-weight: 500;
-  line-height: 1.35;
+  line-height: 1.3;
 }
 
-/* ── Sezione Grafico Andamento Economico ───────────────────────────────── */
+/* ── Sezione Grafico Andamento Economico (Proporzionato) ───────────────── */
 .stats-panel-card {
   background: var(--color-surface);
   border: 1px solid #e3e8e5;
-  border-radius: 14px;
-  padding: 22px 24px;
-  box-shadow: 0 1px 4px rgba(23, 23, 23, 0.02);
+  border-radius: 12px;
+  padding: 20px 22px;
+  box-shadow: 0 1px 3px rgba(23, 23, 23, 0.02);
 }
 
 .stats-panel-header {
@@ -3822,13 +3829,13 @@ button, input, select, textarea {
   justify-content: space-between;
   align-items: flex-start;
   gap: 16px;
-  margin-bottom: 18px;
+  margin-bottom: 16px;
   flex-wrap: wrap;
 }
 
 .stats-panel-title {
   font-family: var(--font-sans);
-  font-size: 16.5px;
+  font-size: 16px;
   font-weight: 800;
   color: var(--color-dark);
   margin: 0;
@@ -3903,20 +3910,42 @@ button, input, select, textarea {
   color: #9a3412;
 }
 
-/* Viewport SVG Grafico */
+/* Viewport SVG Grafico con altezza corretta */
 .stats-chart-viewport-wrapper {
   position: relative;
   width: 100%;
+  overflow-x: visible;
+  padding-bottom: 4px;
+}
+
+.stats-chart-viewport-wrapper.scrollable-month {
   overflow-x: auto;
-  padding-bottom: 6px;
+  -webkit-overflow-scrolling: touch;
   scrollbar-width: thin;
+}
+
+.stats-mobile-scroll-hint {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #0F6B4F;
+  background-color: #eef7f2;
+  border: 1px solid #d3e7dc;
+  padding: 5px 10px;
+  border-radius: 6px;
+  margin-bottom: 8px;
+  font-weight: 600;
 }
 
 .stats-svg-container {
   position: relative;
   width: 100%;
-  min-width: 640px;
-  height: 260px;
+  height: 360px; /* Altezza verticale proporzionata per eliminare l'effetto schiacciato */
+}
+
+.stats-chart-viewport-wrapper.scrollable-month .stats-svg-container {
+  min-width: 620px;
 }
 
 .stats-trend-svg {
@@ -3925,7 +3954,28 @@ button, input, select, textarea {
   display: block;
 }
 
-/* Tooltip Interattivo Grafico */
+/* Indicatore di periodo a zero vendite */
+.stats-chart-zero-hint {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background-color: #ffffff;
+  border: 1px solid #dce8e1;
+  color: #3b5044;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 20px;
+  z-index: 5;
+  pointer-events: none;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+}
+
+/* Tooltip Interattivo Grafico vincolato */
 .stats-chart-tooltip {
   position: absolute;
   transform: translate(-50%, -100%);
@@ -3995,26 +4045,27 @@ button, input, select, textarea {
 @media (max-width: 960px) {
   .stats-bottom-grid {
     grid-template-columns: 1fr;
+    gap: 16px;
   }
 }
 
 .stats-count-tag {
   background-color: #edf3ef;
   color: #3b5044;
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 700;
   padding: 3px 8px;
-  border-radius: 6px;
+  border-radius: 5px;
 }
 
 .stats-empty-state {
   text-align: center;
-  padding: 32px 16px;
+  padding: 28px 16px;
   color: #8c9e94;
-  font-size: 13.5px;
+  font-size: 13px;
 }
 
-/* Tabella Ripartizione Fasce */
+/* Tabella Ripartizione Fasce (Desktop) */
 .stats-tier-table-wrapper {
   overflow-x: auto;
 }
@@ -4025,19 +4076,23 @@ button, input, select, textarea {
   font-size: 13px;
 }
 
+.stats-tier-table-desktop {
+  display: table;
+}
+
 .stats-tier-table th {
   padding: 9px 10px;
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.4px;
   color: #72847a;
   border-bottom: 1px solid #e5ebe7;
   background-color: #fafcfb;
 }
 
 .stats-tier-table td {
-  padding: 10px 10px;
+  padding: 9px 10px;
   border-bottom: 1px solid #edf2ee;
   color: #24332b;
   vertical-align: middle;
@@ -4055,7 +4110,7 @@ button, input, select, textarea {
   color: var(--color-primary);
   padding: 3px 8px;
   border-radius: 5px;
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 700;
 }
 
@@ -4093,18 +4148,71 @@ button, input, select, textarea {
   text-align: right;
 }
 
+/* ── Vista Mobile per Ripartizione Fasce (Cards Compatte) ──────────────── */
+.stats-tier-mobile-list {
+  display: none;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.stats-tier-mobile-card {
+  background-color: #fcfdfc;
+  border: 1px solid #e7ede9;
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.stats-tier-mobile-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.stats-tier-mobile-amounts {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.stats-tier-mobile-rev {
+  font-size: 13.5px;
+  font-weight: 800;
+  color: #171717;
+}
+
+.stats-tier-mobile-agg {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--color-primary);
+}
+
+.stats-tier-mobile-bottom {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.stats-tier-mobile-bottom .stats-share-bar-cell {
+  flex: 1;
+  max-width: 140px;
+}
+
 /* Sezione Flussi Cassa & Payout */
 .stats-cashflow-body {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
 }
 
 .stats-submodule-box {
   background-color: #fbfdfc;
   border: 1px solid #e7ede9;
-  border-radius: 10px;
-  padding: 14px 16px;
+  border-radius: 9px;
+  padding: 13px 15px;
 }
 
 .stats-submodule-header {
@@ -4112,38 +4220,38 @@ button, input, select, textarea {
   justify-content: space-between;
   align-items: flex-start;
   gap: 12px;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
 .stats-submodule-title {
-  font-size: 13.5px;
+  font-size: 13px;
   font-weight: 700;
   color: var(--color-dark);
   margin: 0;
 }
 
 .stats-submodule-desc {
-  font-size: 12px;
+  font-size: 11.5px;
   color: #718178;
   margin: 2px 0 0 0;
   line-height: 1.35;
 }
 
 .stats-payout-badge {
-  font-size: 18px;
+  font-size: 17px;
   font-weight: 800;
   color: #b45309;
   background-color: #fef3c7;
   border: 1px solid #fde68a;
-  padding: 2px 8px;
-  border-radius: 6px;
+  padding: 2px 7px;
+  border-radius: 5px;
   letter-spacing: -0.3px;
   flex-shrink: 0;
 }
 
 .payout-track {
-  height: 9px;
-  margin-bottom: 6px;
+  height: 8px;
+  margin-bottom: 5px;
 }
 
 .payout-fill {
@@ -4156,6 +4264,8 @@ button, input, select, textarea {
   font-size: 11px;
   color: #8c9e94;
   font-weight: 500;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
 /* Righe Dettaglio Tipologia Vincite */
@@ -4172,7 +4282,7 @@ button, input, select, textarea {
   padding: 8px 10px;
   background-color: #ffffff;
   border: 1px solid #edf2ee;
-  border-radius: 8px;
+  border-radius: 7px;
 }
 
 .stats-row-left {
@@ -4182,9 +4292,9 @@ button, input, select, textarea {
 }
 
 .stats-type-tag {
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 700;
-  padding: 2px 7px;
+  padding: 2px 6px;
   border-radius: 4px;
   white-space: nowrap;
 }
@@ -4202,7 +4312,7 @@ button, input, select, textarea {
 }
 
 .stats-row-desc {
-  font-size: 12px;
+  font-size: 11.5px;
   color: #63736b;
 }
 
@@ -4213,7 +4323,7 @@ button, input, select, textarea {
 }
 
 .stats-row-count {
-  font-size: 11px;
+  font-size: 10.5px;
   color: #88998f;
 }
 
@@ -4224,8 +4334,8 @@ button, input, select, textarea {
   justify-content: space-around;
   background: #ffffff;
   border: 1px solid #edf2ee;
-  border-radius: 8px;
-  padding: 12px 14px;
+  border-radius: 7px;
+  padding: 11px 13px;
 }
 
 .stats-inv-stat {
@@ -4238,31 +4348,223 @@ button, input, select, textarea {
 
 .stats-inv-divider {
   width: 1px;
-  height: 40px;
+  height: 36px;
   background-color: #e5ebe7;
 }
 
 .stats-inv-label {
-  font-size: 11.5px;
+  font-size: 11px;
   color: #6a7c73;
   font-weight: 600;
   margin-bottom: 2px;
 }
 
 .stats-inv-val {
-  font-size: 17px;
+  font-size: 16.5px;
   font-weight: 800;
   color: var(--color-dark);
 }
 
 .stats-inv-sub {
-  font-size: 11px;
+  font-size: 10.5px;
   color: #88998f;
   margin-top: 1px;
 }
 
+/* ══════════════════════════════════════════════════════════════════════════
+   REGOLE SPECIFICHE PER LA VISUALIZZAZIONE MOBILE STATISTICHE (< 680px)
+   ══════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 680px) {
+  .stats-view-container {
+    gap: 16px;
+  }
 
+  .stats-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
 
+  .stats-main-title {
+    font-size: 20px;
+  }
 
+  .stats-subtitle {
+    font-size: 12px;
+  }
 
+  .stats-controls-panel {
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+    gap: 8px;
+  }
 
+  .stats-period-pills {
+    width: 100%;
+  }
+
+  .stats-pill-btn {
+    flex: 1;
+    text-align: center;
+    padding: 7px 8px;
+    font-size: 12.5px;
+  }
+
+  .stats-date-navigator {
+    width: 100%;
+    justify-content: space-between;
+    padding: 4px 6px;
+  }
+
+  .stats-date-badge {
+    flex: 1;
+    justify-content: center;
+    padding: 4px 6px;
+    min-width: 0;
+  }
+
+  .stats-date-text.desktop-label {
+    display: none;
+  }
+
+  .stats-date-text.mobile-label {
+    display: inline;
+    font-size: 12.5px;
+  }
+
+  .stats-kpi-card {
+    padding: 12px 10px;
+  }
+
+  .stats-kpi-value {
+    font-size: 17px;
+  }
+
+  .stats-panel-card {
+    padding: 16px 14px;
+    border-radius: 10px;
+  }
+
+  .stats-panel-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+
+  .stats-chart-controls {
+    width: 100%;
+  }
+
+  .stats-chart-legend {
+    gap: 8px 12px;
+  }
+
+  .stats-svg-container {
+    height: 300px;
+  }
+
+  .stats-mobile-scroll-hint {
+    display: flex;
+  }
+
+  /* Scambio Tabella -> Card su mobile per Ripartizione Fasce */
+  .stats-tier-table-desktop {
+    display: none;
+  }
+
+  .stats-tier-mobile-list {
+    display: flex;
+  }
+}
+
+@media (max-width: 480px) {
+  .stats-kpi-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+  }
+
+  .stats-kpi-card {
+    padding: 10px 8px;
+  }
+
+  .stats-kpi-label {
+    font-size: 10px;
+  }
+
+  .stats-kpi-value {
+    font-size: 16px;
+  }
+
+  .stats-kpi-sub {
+    font-size: 10px;
+  }
+
+  .stats-summary-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  .stats-row-right {
+    align-items: flex-start;
+  }
+
+  .stats-inventory-comparison {
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+  }
+
+  .stats-inv-divider {
+    width: 100%;
+    height: 1px;
+  }
+}
+
+/* ── Tasto a tutta larghezza in fondo alla pagina Statistiche ───────────── */
+.stats-fullwidth-action-wrap {
+  width: 100%;
+  margin-top: 20px;
+  margin-bottom: 28px;
+}
+
+.stats-btn-fullwidth-pdf {
+  width: 100%;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background-color: var(--color-primary);
+  color: #ffffff;
+  border: none;
+  border-radius: 10px;
+  padding: 16px 24px;
+  font-family: var(--font-sans);
+  font-size: 15.5px;
+  font-weight: 700;
+  letter-spacing: -0.2px;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(15, 107, 79, 0.2);
+  transition: all var(--transition-fast);
+}
+
+.stats-btn-fullwidth-pdf:hover {
+  background-color: var(--color-primary-hover);
+  box-shadow: 0 4px 14px rgba(15, 107, 79, 0.32);
+  transform: translateY(-1px);
+}
+
+.stats-btn-fullwidth-pdf:active {
+  transform: translateY(0);
+}
+
+@media (max-width: 768px) {
+  .stats-btn-fullwidth-pdf {
+    padding: 14px 16px;
+    font-size: 14px;
+    gap: 9px;
+  }
+}

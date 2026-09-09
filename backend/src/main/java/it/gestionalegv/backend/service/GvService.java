@@ -91,14 +91,26 @@ public class GvService {
     public GvSaleDTO updateSale(Long tabacchinoId, BigDecimal price, Integer delta) {
         LocalDate today = LocalDate.now();
         Tabacchino tabacchino = getTabacchino(tabacchinoId);
+        BigDecimal normalizedPrice = price.setScale(2, RoundingMode.HALF_UP);
 
-        GvSale sale = saleRepository.findByTabacchinoIdAndPriceAndSaleDateAndDeletedFalse(tabacchinoId, price, today)
-                .orElseGet(() -> new GvSale(tabacchino, price, 0, today));
+        Optional<GvSale> existingSaleOpt = saleRepository.findByTabacchinoIdAndPriceAndSaleDate(tabacchinoId, normalizedPrice, today);
 
-        int newQuantity = Math.max(0, sale.getQuantity() + delta);
-        sale.setQuantity(newQuantity);
-        sale.setDeleted(false);
-        sale.setUpdatedAt(LocalDateTime.now());
+        GvSale sale;
+        if (existingSaleOpt.isPresent()) {
+            sale = existingSaleOpt.get();
+            int baseQuantity = Boolean.TRUE.equals(sale.getDeleted()) ? 0 : (sale.getQuantity() != null ? sale.getQuantity() : 0);
+            int newQuantity = Math.max(0, baseQuantity + delta);
+            sale.setQuantity(newQuantity);
+            sale.setDeleted(false);
+            sale.setDeletedAt(null);
+            sale.setUpdatedAt(LocalDateTime.now());
+        } else {
+            int newQuantity = Math.max(0, delta);
+            sale = new GvSale(tabacchino, normalizedPrice, newQuantity, today);
+            sale.setDeleted(false);
+            sale.setDeletedAt(null);
+            sale.setUpdatedAt(LocalDateTime.now());
+        }
 
         GvSale saved = saleRepository.save(sale);
         return toSaleDTO(saved);
@@ -401,8 +413,8 @@ public class GvService {
         // 1. Fasce di prezzo configurate
         List<GvPriceTier> priceTiers = priceTierRepository.findByTabacchinoIdOrderByPriceAsc(tabacchinoId);
 
-        // 2. Query Vendite nel range di date
-        List<GvSale> sales = saleRepository.findByTabacchinoIdAndSaleDateBetween(tabacchinoId, startDate, endDate);
+        // 2. Query Vendite nel range di date (solo record attivi, esclusi soft-deleted)
+        List<GvSale> sales = saleRepository.findByTabacchinoIdAndSaleDateBetweenAndDeletedFalse(tabacchinoId, startDate, endDate);
 
         // 3. Query Vincite nel range di date/orari
         List<GvWinning> winnings = winningRepository.findByTabacchinoIdAndRecordedAtBetweenAndDeletedFalseOrderByRecordedAtDesc(
