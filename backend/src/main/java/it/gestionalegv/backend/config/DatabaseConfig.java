@@ -14,8 +14,18 @@ public class DatabaseConfig {
     @Primary
     public DataSource dataSource(DataSourceProperties properties) {
         String url = properties.getUrl();
-        if (url != null && !url.trim().isEmpty() && !url.startsWith("jdbc:")) {
-            url = "jdbc:" + url.trim();
+        if (url != null && !url.trim().isEmpty()) {
+            url = url.trim();
+            if (!url.startsWith("jdbc:")) {
+                url = "jdbc:" + url;
+            }
+            // Switch automatico a transaction mode (porta 6543) per evitare limiti di connessione (EMAXCONNSESSION)
+            if (url.contains("pooler.supabase.com:5432")) {
+                url = url.replace(":5432", ":6543");
+            }
+            if (url.contains("6543") && !url.contains("prepareThreshold")) {
+                url += (url.contains("?") ? "&" : "?") + "prepareThreshold=0";
+            }
         }
         return properties.initializeDataSourceBuilder()
                 .url(url)
