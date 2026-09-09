@@ -6,6 +6,7 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 3000,
+    allowedHosts: true,
     watch: {
       usePolling: true,
       interval: 500,
@@ -17,6 +18,11 @@ export default defineConfig({
         secure: false,
       },
     },
+  },
+  preview: {
+    host: '0.0.0.0',
+    port: 3000,
+    allowedHosts: true,
   },
 })
 
