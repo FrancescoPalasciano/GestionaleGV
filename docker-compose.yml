@@ -18,6 +18,7 @@ services:
       SPRING_DATASOURCE_URL: ${SUPABASE_DB_JDBC_URL}
       SPRING_DATASOURCE_USERNAME: ${SUPABASE_DB_USER}
       SPRING_DATASOURCE_PASSWORD: ${SUPABASE_DB_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
     volumes:
       - ./backend:/workspace
       - maven-repository:/root/.m2
