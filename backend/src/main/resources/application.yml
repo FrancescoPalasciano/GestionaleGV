@@ -2,9 +2,10 @@ spring:
   application:
     name: gestionale-gv-backend
   datasource:
-    url: ${SPRING_DATASOURCE_URL:${SUPABASE_DB_JDBC_URL:}}
-    username: ${SPRING_DATASOURCE_USERNAME:${SUPABASE_DB_USER:}}
-    password: ${SPRING_DATASOURCE_PASSWORD:${SUPABASE_DB_PASSWORD:}}
+    driver-class-name: org.postgresql.Driver
+    url: ${SPRING_DATASOURCE_URL:${SUPABASE_DB_JDBC_URL:***REMOVED***}}
+    username: ${SPRING_DATASOURCE_USERNAME:${SUPABASE_DB_USER:***REMOVED***}}
+    password: ${SPRING_DATASOURCE_PASSWORD:${SUPABASE_DB_PASSWORD:***REMOVED***}}
     hikari:
       maximum-pool-size: 5
   jpa:
