@@ -22,7 +22,7 @@ import java.util.List;
 
 /**
  * Configurazione centrale Spring Security:
- * - CORS ristretto a localhost:5173
+ * - CORS per sviluppo locale e origini di pubblicazione autorizzate
  * - CSRF disabilitato (API stateless)
  * - Sessione STATELESS (nessun cookie di sessione)
  * - Endpoint pubblici: /api/v1/auth/**, /api/v1/health
@@ -94,6 +94,7 @@ public class SecurityConfig {
         config.setAllowedOriginPatterns(List.of(
                 "http://localhost:*",
                 "http://127.0.0.1:*",
+                "http://*.sslip.io",
                 "https://*.sslip.io",
                 "https://tabacchipro.it",
                 "https://www.tabacchipro.it"
