@@ -1,11 +1,13 @@
 package it.gestionalegv.backend.dto;
 
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.DecimalMin;
 import java.math.BigDecimal;
 
 public class GvSaleUpdateRequest {
 
     @NotNull(message = "Il prezzo è obbligatorio")
+    @DecimalMin(value = "0.01", message = "Il prezzo deve essere maggiore di zero")
     private BigDecimal price;
 
     @NotNull(message = "Il delta quantità è obbligatorio")

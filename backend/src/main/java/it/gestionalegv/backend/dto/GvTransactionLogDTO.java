@@ -14,6 +14,7 @@ public class GvTransactionLogDTO {
     private String label;
     private String timeRecorded;
     private LocalDateTime recordedAt;
+    private Long relatedEntityId;
 
     public GvTransactionLogDTO() {
     }
@@ -101,5 +102,13 @@ public class GvTransactionLogDTO {
 
     public void setRecordedAt(LocalDateTime recordedAt) {
         this.recordedAt = recordedAt;
+    }
+
+    public Long getRelatedEntityId() {
+        return relatedEntityId;
+    }
+
+    public void setRelatedEntityId(Long relatedEntityId) {
+        this.relatedEntityId = relatedEntityId;
     }
 }

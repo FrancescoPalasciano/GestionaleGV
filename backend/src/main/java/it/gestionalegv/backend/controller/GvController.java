@@ -72,6 +72,12 @@ public class GvController {
         return ResponseEntity.ok(updated);
     }
 
+    @PostMapping("/sales/transaction")
+    public ResponseEntity<GvSaleDTO> updateSaleAndLog(@Valid @RequestBody GvSaleTransactionRequest request) {
+        Long tabacchinoId = securityUtils.getCurrentTabacchinoId();
+        return ResponseEntity.ok(gvService.updateSaleAndLog(tabacchinoId, request));
+    }
+
     @PostMapping("/sales/reset")
     public ResponseEntity<Map<String, String>> resetSalesToday() {
         Long tabacchinoId = securityUtils.getCurrentTabacchinoId();
@@ -93,6 +99,13 @@ public class GvController {
     public ResponseEntity<GvWinningDTO> addWinning(@Valid @RequestBody GvWinningCreateRequest request) {
         Long tabacchinoId = securityUtils.getCurrentTabacchinoId();
         GvWinningDTO created = gvService.addWinning(tabacchinoId, request);
+        return ResponseEntity.status(HttpStatus.CREATED).body(created);
+    }
+
+    @PostMapping("/winnings/transaction")
+    public ResponseEntity<GvWinningDTO> addWinningAndLog(@Valid @RequestBody GvWinningCreateRequest request) {
+        Long tabacchinoId = securityUtils.getCurrentTabacchinoId();
+        GvWinningDTO created = gvService.addWinningWithLog(tabacchinoId, request);
         return ResponseEntity.status(HttpStatus.CREATED).body(created);
     }
 
@@ -145,11 +158,9 @@ public class GvController {
     }
 
     @PostMapping("/purchases/stecca")
-    public ResponseEntity<?> updateStecca(@RequestBody Map<String, Object> payload) {
+    public ResponseEntity<?> updateStecca(@Valid @RequestBody GvSaleUpdateRequest request) {
         Long tabacchinoId = securityUtils.getCurrentTabacchinoId();
-        BigDecimal price = new BigDecimal(payload.get("price").toString());
-        int delta = Integer.parseInt(payload.get("delta").toString());
-        GvPurchaseDTO result = gvService.addSteccaPurchase(tabacchinoId, price, delta);
+        GvPurchaseDTO result = gvService.addSteccaPurchase(tabacchinoId, request.getPrice(), request.getDelta());
         return ResponseEntity.ok(result != null ? result : Map.of("status", "updated"));
     }
 

@@ -18,22 +18,40 @@ const getApiBase = () => {
 const API_BASE = getApiBase();
 
 export const tokenStorage = {
-  get: () => localStorage.getItem('gv_token'),
-  set: (token) => localStorage.setItem('gv_token', token),
-  remove: () => localStorage.removeItem('gv_token'),
+  get: () => localStorage.getItem('gv_token') || sessionStorage.getItem('gv_token'),
+  set: (token, persistent = true) => {
+    const target = persistent ? localStorage : sessionStorage;
+    const other = persistent ? sessionStorage : localStorage;
+    other.removeItem('gv_token');
+    target.setItem('gv_token', token);
+  },
+  remove: () => {
+    localStorage.removeItem('gv_token');
+    sessionStorage.removeItem('gv_token');
+  },
   getUser: () => {
-    const raw = localStorage.getItem('gv_user');
+    const raw = localStorage.getItem('gv_user') || sessionStorage.getItem('gv_user');
     try {
       return raw ? JSON.parse(raw) : null;
     } catch {
       return null;
     }
   },
-  setUser: (user) => localStorage.setItem('gv_user', JSON.stringify(user)),
-  removeUser: () => localStorage.removeItem('gv_user'),
+  setUser: (user, persistent = true) => {
+    const target = persistent ? localStorage : sessionStorage;
+    const other = persistent ? sessionStorage : localStorage;
+    other.removeItem('gv_user');
+    target.setItem('gv_user', JSON.stringify(user));
+  },
+  removeUser: () => {
+    localStorage.removeItem('gv_user');
+    sessionStorage.removeItem('gv_user');
+  },
   clear: () => {
     localStorage.removeItem('gv_token');
     localStorage.removeItem('gv_user');
+    sessionStorage.removeItem('gv_token');
+    sessionStorage.removeItem('gv_user');
   }
 };
 
@@ -65,6 +83,10 @@ async function request(endpoint, options = {}) {
       const error = new Error(errorMsg);
       error.status = response.status;
       error.data = data;
+      if (response.status === 401 && token) {
+        tokenStorage.clear();
+        window.dispatchEvent(new CustomEvent('auth:expired'));
+      }
       throw error;
     }
 
@@ -81,14 +103,17 @@ async function request(endpoint, options = {}) {
 
 export const api = {
   // Auth endpoints
-  login: async (credentials) => {
+  login: async (credentials, rememberMe = true) => {
     const res = await request('/auth/login', {
       method: 'POST',
       body: JSON.stringify(credentials),
     });
     if (res.token) {
-      tokenStorage.set(res.token);
-      tokenStorage.setUser(res);
+      tokenStorage.set(res.token, rememberMe);
+      const profile = await request('/tabacchini/me');
+      const authenticatedUser = { ...res, ...profile };
+      tokenStorage.setUser(authenticatedUser, rememberMe);
+      return authenticatedUser;
     }
     return res;
   },
@@ -139,6 +164,12 @@ export const api = {
         body: JSON.stringify({ price, delta }),
       });
     },
+    updateSaleAndLog: async (price, delta, timeRecorded) => {
+      return await request('/gv/sales/transaction', {
+        method: 'POST',
+        body: JSON.stringify({ price, delta, timeRecorded }),
+      });
+    },
     resetSalesToday: async () => {
       return await request('/gv/sales/reset', {
         method: 'POST',
@@ -149,6 +180,12 @@ export const api = {
     },
     addWinning: async (data) => {
       return await request('/gv/winnings', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      });
+    },
+    addWinningAndLog: async (data) => {
+      return await request('/gv/winnings/transaction', {
         method: 'POST',
         body: JSON.stringify(data),
       });

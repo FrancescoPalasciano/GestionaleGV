@@ -4,11 +4,9 @@ import it.gestionalegv.backend.dto.DashboardChartPointDTO;
 import it.gestionalegv.backend.dto.DashboardOperationDTO;
 import it.gestionalegv.backend.dto.DashboardStatsDTO;
 import it.gestionalegv.backend.model.GvPurchase;
-import it.gestionalegv.backend.model.GvSale;
 import it.gestionalegv.backend.model.GvTransactionLog;
 import it.gestionalegv.backend.model.GvWinning;
 import it.gestionalegv.backend.repository.GvPurchaseRepository;
-import it.gestionalegv.backend.repository.GvSaleRepository;
 import it.gestionalegv.backend.repository.GvTransactionLogRepository;
 import it.gestionalegv.backend.repository.GvWinningRepository;
 import org.springframework.stereotype.Service;
@@ -30,16 +28,13 @@ import java.util.Locale;
 @Transactional(readOnly = true)
 public class DashboardService {
 
-    private final GvSaleRepository saleRepository;
     private final GvWinningRepository winningRepository;
     private final GvPurchaseRepository purchaseRepository;
     private final GvTransactionLogRepository transactionLogRepository;
 
-    public DashboardService(GvSaleRepository saleRepository,
-                            GvWinningRepository winningRepository,
+    public DashboardService(GvWinningRepository winningRepository,
                             GvPurchaseRepository purchaseRepository,
                             GvTransactionLogRepository transactionLogRepository) {
-        this.saleRepository = saleRepository;
         this.winningRepository = winningRepository;
         this.purchaseRepository = purchaseRepository;
         this.transactionLogRepository = transactionLogRepository;
@@ -95,28 +90,47 @@ public class DashboardService {
         }
 
         // 1. Vendite nel periodo corrente (esclusi record soft-deleted)
-        List<GvSale> currentSales = saleRepository.findByTabacchinoIdAndSaleDateBetweenAndDeletedFalse(tabacchinoId, startDate, endDate);
+        List<GvTransactionLog> currentTransactions = transactionLogRepository
+                .findByTabacchinoIdAndRecordedAtBetweenAndDeletedFalseOrderByRecordedAtDesc(
+                        tabacchinoId, startDate.atStartOfDay(), endDate.atTime(LocalTime.MAX));
         int soldGv = 0;
         BigDecimal totalRevenue = BigDecimal.ZERO;
-        for (GvSale s : currentSales) {
-            int q = s.getQuantity() != null ? s.getQuantity() : 0;
-            soldGv += q;
-            BigDecimal lineRevenue = s.getPrice().multiply(BigDecimal.valueOf(q));
-            totalRevenue = totalRevenue.add(lineRevenue);
+        for (GvTransactionLog transaction : currentTransactions) {
+            if (transaction.getPrice() == null) continue;
+            int q = transaction.getQuantity() != null ? transaction.getQuantity() : 1;
+            if ("gv_add".equalsIgnoreCase(transaction.getType())) {
+                soldGv += q;
+                totalRevenue = totalRevenue.add(transaction.getPrice().multiply(BigDecimal.valueOf(q)));
+            } else if ("gv_sub".equalsIgnoreCase(transaction.getType())) {
+                soldGv -= q;
+                totalRevenue = totalRevenue.subtract(transaction.getPrice().multiply(BigDecimal.valueOf(q)));
+            }
         }
+        soldGv = Math.max(0, soldGv);
+        totalRevenue = totalRevenue.max(BigDecimal.ZERO);
 
         // Guadagno parziale: Aggio dell'8% su Gratta e Vinci venduti (normativa italiana monopolio)
         BigDecimal partialProfit = totalRevenue.multiply(BigDecimal.valueOf(0.08)).setScale(2, RoundingMode.HALF_UP);
 
         // 2. Vendite periodo di confronto (per calcolo trend vs ieri/periodo prec.)
-        List<GvSale> compSales = saleRepository.findByTabacchinoIdAndSaleDateBetweenAndDeletedFalse(tabacchinoId, compStartDate, compEndDate);
+        List<GvTransactionLog> compTransactions = transactionLogRepository
+                .findByTabacchinoIdAndRecordedAtBetweenAndDeletedFalseOrderByRecordedAtDesc(
+                        tabacchinoId, compStartDate.atStartOfDay(), compEndDate.atTime(LocalTime.MAX));
         int compSoldGv = 0;
         BigDecimal compTotalRevenue = BigDecimal.ZERO;
-        for (GvSale s : compSales) {
-            int q = s.getQuantity() != null ? s.getQuantity() : 0;
-            compSoldGv += q;
-            compTotalRevenue = compTotalRevenue.add(s.getPrice().multiply(BigDecimal.valueOf(q)));
+        for (GvTransactionLog transaction : compTransactions) {
+            if (transaction.getPrice() == null) continue;
+            int q = transaction.getQuantity() != null ? transaction.getQuantity() : 1;
+            if ("gv_add".equalsIgnoreCase(transaction.getType())) {
+                compSoldGv += q;
+                compTotalRevenue = compTotalRevenue.add(transaction.getPrice().multiply(BigDecimal.valueOf(q)));
+            } else if ("gv_sub".equalsIgnoreCase(transaction.getType())) {
+                compSoldGv -= q;
+                compTotalRevenue = compTotalRevenue.subtract(transaction.getPrice().multiply(BigDecimal.valueOf(q)));
+            }
         }
+        compSoldGv = Math.max(0, compSoldGv);
+        compTotalRevenue = compTotalRevenue.max(BigDecimal.ZERO);
         BigDecimal compPartialProfit = compTotalRevenue.multiply(BigDecimal.valueOf(0.08)).setScale(2, RoundingMode.HALF_UP);
 
         // Calcolo Trend Biglietti Venduti
@@ -214,11 +228,12 @@ public class DashboardService {
         }
 
         // 6. Punti del grafico per i 7 giorni della settimana corrente (da Lunedì a Domenica)
-        LocalDate mondayOfWeek = today.with(DayOfWeek.MONDAY);
+        LocalDate chartEnd = "week".equalsIgnoreCase(period) ? startDate.plusDays(6) : endDate;
+        LocalDate chartStart = "week".equalsIgnoreCase(period) ? startDate : chartEnd.minusDays(6);
         List<DashboardChartPointDTO> chartPoints = new ArrayList<>();
         DateTimeFormatter dayMonthFmt = DateTimeFormatter.ofPattern("d MMM", Locale.ITALIAN);
         for (int i = 0; i < 7; i++) {
-            LocalDate day = mondayOfWeek.plusDays(i);
+            LocalDate day = chartStart.plusDays(i);
             String dayLabel = day.getDayOfWeek().getDisplayName(TextStyle.SHORT, Locale.ITALIAN);
             dayLabel = dayLabel.substring(0, 1).toUpperCase() + dayLabel.substring(1);
 
@@ -228,14 +243,24 @@ public class DashboardService {
             String formattedDate = day.format(dayMonthFmt);
             boolean isToday = day.equals(today);
 
-            List<GvSale> daySales = saleRepository.findByTabacchinoIdAndSaleDateAndDeletedFalse(tabacchinoId, day);
+            List<GvTransactionLog> dayTransactions = transactionLogRepository
+                    .findByTabacchinoIdAndRecordedAtBetweenAndDeletedFalseOrderByRecordedAtDesc(
+                            tabacchinoId, day.atStartOfDay(), day.atTime(LocalTime.MAX));
             BigDecimal dayRevenue = BigDecimal.ZERO;
             int dayTickets = 0;
-            for (GvSale s : daySales) {
-                int q = s.getQuantity() != null ? s.getQuantity() : 0;
-                dayTickets += q;
-                dayRevenue = dayRevenue.add(s.getPrice().multiply(BigDecimal.valueOf(q)));
+            for (GvTransactionLog transaction : dayTransactions) {
+                if (transaction.getPrice() == null) continue;
+                int q = transaction.getQuantity() != null ? transaction.getQuantity() : 1;
+                if ("gv_add".equalsIgnoreCase(transaction.getType())) {
+                    dayTickets += q;
+                    dayRevenue = dayRevenue.add(transaction.getPrice().multiply(BigDecimal.valueOf(q)));
+                } else if ("gv_sub".equalsIgnoreCase(transaction.getType())) {
+                    dayTickets -= q;
+                    dayRevenue = dayRevenue.subtract(transaction.getPrice().multiply(BigDecimal.valueOf(q)));
+                }
             }
+            dayTickets = Math.max(0, dayTickets);
+            dayRevenue = dayRevenue.max(BigDecimal.ZERO);
             BigDecimal dayProfit = dayRevenue.multiply(BigDecimal.valueOf(0.08)).setScale(2, RoundingMode.HALF_UP);
 
             chartPoints.add(new DashboardChartPointDTO(dayLabel, dayFullName, formattedDate, isToday, day, dayRevenue, dayTickets, dayProfit));

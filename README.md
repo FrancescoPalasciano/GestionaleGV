@@ -25,3 +25,17 @@ Le modifiche a frontend e backend vengono montate nei container; Vite e Spring B
 Nel progetto Spring Boot includi almeno `spring-boot-starter-web`, `spring-boot-starter-data-jpa` e il driver `org.postgresql:postgresql`. Le proprietà `SPRING_DATASOURCE_*` vengono fornite automaticamente dal compose.
 
 Per un collegamento più stabile a Supabase usa esattamente la URL JDBC indicata in **Connect** nella dashboard. Mantieni `sslmode=require` e non caricare mai il file `.env` nel repository.
+
+## Verifica dell'interfaccia
+
+I test Playwright avviano un frontend isolato sulla porta 4174 e usano risposte API simulate: non modificano il database. Verificano le quattro viste da 320 a 1920 px, grafici, menu, finestre di dialogo, touch, tastiera e schermate di accesso.
+
+```powershell
+cd frontend
+npm install
+npx playwright install chromium
+npm run test:ui
+npm run build
+```
+
+Per usare Chrome già installato: `$env:PLAYWRIGHT_CHANNEL = 'chrome'` prima dei test. Le schermate di verifica vengono salvate in `frontend/test-results/`.

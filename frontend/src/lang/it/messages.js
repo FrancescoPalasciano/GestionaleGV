@@ -8,7 +8,7 @@ export default {
     dashboard: "Dashboard",
     grattaEVinci: "Gratta e Vinci",
     statistiche: "Statistiche",
-    impostazioni: "Impostazioni",
+    impostazioni: "Profilo attività",
     tabacchi: "Tabacchi e Magazzino",
     servizi: "Servizi e Pagamenti",
     cassa: "Cassa e Corrispettivi",
@@ -50,7 +50,6 @@ export default {
     indirizzoLabel: "Indirizzo",
     indirizzoPlaceholder: "es. Via Roma 10, Milano",
     rememberMe: "Rimani connesso",
-    forgotPassword: "Password dimenticata?",
     loginButton: "Accedi al Sistema",
     registerButton: "Registra la tua Tabaccheria",
     processing: "Elaborazione in corso...",
@@ -58,7 +57,7 @@ export default {
     noAccountAction: "Registrati ora gratuitamente",
     hasAccountPrompt: "Hai già un account attivo?",
     hasAccountAction: "Accedi alla tua area",
-    securityBadge: "Connessione sicura con crittografia JWT e database protetto",
+    securityBadge: "Accesso protetto e dati sincronizzati in modo sicuro",
   },
 
   // Messages & Alerts
@@ -144,9 +143,9 @@ export default {
 
   // Impostazioni Section
   impostazioni: {
-    title: "Impostazioni Rivendita",
-    subtitle: "Configurazione profilo tabaccheria, parametri fiscali e sicurezza",
-    storeInfo: "Dati della Tabaccheria",
+    title: "Profilo attività",
+    subtitle: "Dati identificativi e contatti associati al tuo account",
+    storeInfo: "Dati della rivendita",
     credentials: "Credenziali e Sicurezza",
     fiscalInfo: "Parametri Fiscali Monopolio",
     saveChanges: "Salva Modifiche",

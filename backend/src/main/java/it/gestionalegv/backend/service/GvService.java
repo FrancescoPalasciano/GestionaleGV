@@ -116,6 +116,34 @@ public class GvService {
         return toSaleDTO(saved);
     }
 
+    /** Aggiorna il contatore e registra lo storico nella stessa transazione DB. */
+    public GvSaleDTO updateSaleAndLog(Long tabacchinoId, GvSaleTransactionRequest request) {
+        BigDecimal price = request.getPrice().setScale(2, RoundingMode.HALF_UP);
+        LocalDate today = LocalDate.now();
+        int previousQuantity = saleRepository
+                .findByTabacchinoIdAndPriceAndSaleDate(tabacchinoId, price, today)
+                .filter(s -> !Boolean.TRUE.equals(s.getDeleted()))
+                .map(GvSale::getQuantity)
+                .orElse(0);
+
+        GvSaleDTO updated = updateSale(tabacchinoId, price, request.getDelta());
+        int appliedDelta = updated.getQuantity() - previousQuantity;
+        if (appliedDelta != 0) {
+            int quantity = Math.abs(appliedDelta);
+            GvTransactionLogCreateRequest logRequest = new GvTransactionLogCreateRequest();
+            logRequest.setType(appliedDelta > 0 ? "gv_add" : "gv_sub");
+            logRequest.setPrice(price);
+            logRequest.setQuantity(quantity);
+            logRequest.setAmount(price.multiply(BigDecimal.valueOf(quantity)));
+            logRequest.setLabel(appliedDelta > 0
+                    ? "+" + quantity + " bigliett" + (quantity == 1 ? "o" : "i") + " da € " + price
+                    : "−" + quantity + " storn" + (quantity == 1 ? "o" : "i") + " da € " + price);
+            logRequest.setTimeRecorded(request.getTimeRecorded());
+            logTransaction(tabacchinoId, logRequest);
+        }
+        return updated;
+    }
+
     public void resetSalesToday(Long tabacchinoId) {
         LocalDate today = LocalDate.now();
         List<GvSale> activeSales = saleRepository.findByTabacchinoIdAndSaleDateAndDeletedFalse(tabacchinoId, today);
@@ -157,6 +185,17 @@ public class GvService {
                 w.setDeletedAt(now);
             }
             winningRepository.saveAll(todayWins);
+
+            List<GvTransactionLog> todayLogs = transactionLogRepository
+                    .findByTabacchinoIdAndRecordedAtBetweenAndDeletedFalseOrderByRecordedAtDesc(
+                            tabacchinoId, startOfDay, endOfDay);
+            for (GvTransactionLog transaction : todayLogs) {
+                if ("win".equalsIgnoreCase(transaction.getType()) || "closing".equalsIgnoreCase(transaction.getType())) {
+                    transaction.setDeleted(true);
+                    transaction.setDeletedAt(now);
+                }
+            }
+            transactionLogRepository.saveAll(todayLogs);
         }
 
         String timeRecorded = request.getTimeRecorded();
@@ -176,6 +215,22 @@ public class GvService {
 
         GvWinning saved = winningRepository.save(winning);
         return toWinningDTO(saved);
+    }
+
+    /** Registra vincita e relativo movimento di storico in modo atomico. */
+    public GvWinningDTO addWinningWithLog(Long tabacchinoId, GvWinningCreateRequest request) {
+        GvWinningDTO winning = addWinning(tabacchinoId, request);
+        boolean closing = "closing".equalsIgnoreCase(request.getType());
+
+        GvTransactionLogCreateRequest logRequest = new GvTransactionLogCreateRequest();
+        logRequest.setType(closing ? "closing" : "win");
+        logRequest.setAmount(request.getAmount());
+        logRequest.setTier(request.getTier());
+        logRequest.setLabel(closing ? "Chiusura serale terminale" : "Vincita · Biglietto " + request.getTier());
+        logRequest.setTimeRecorded(winning.getTimeRecorded());
+        logRequest.setRelatedEntityId(winning.getId());
+        logTransaction(tabacchinoId, logRequest);
+        return winning;
     }
 
     public void deleteWinning(Long tabacchinoId, Long id) {
@@ -221,19 +276,36 @@ public class GvService {
                 timeRecorded,
                 now
         );
+        logEntry.setRelatedEntityId(request.getRelatedEntityId());
 
         GvTransactionLog saved = transactionLogRepository.save(logEntry);
         return toTransactionLogDTO(saved);
     }
 
     public void deleteTransaction(Long tabacchinoId, Long id) {
-        transactionLogRepository.findById(id).ifPresent(t -> {
-            if (t.getTabacchino().getId().equals(tabacchinoId)) {
-                t.setDeleted(true);
-                t.setDeletedAt(LocalDateTime.now());
-                transactionLogRepository.save(t);
+        GvTransactionLog transaction = transactionLogRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Transazione non trovata"));
+        if (!transaction.getTabacchino().getId().equals(tabacchinoId)) {
+            throw new IllegalArgumentException("Transazione non trovata");
+        }
+
+        if (transaction.getRelatedEntityId() != null
+                && ("win".equalsIgnoreCase(transaction.getType())
+                || "closing".equalsIgnoreCase(transaction.getType()))) {
+            deleteWinning(tabacchinoId, transaction.getRelatedEntityId());
+        }
+
+        if (transaction.getPrice() != null && transaction.getQuantity() != null) {
+            if ("gv_add".equalsIgnoreCase(transaction.getType())) {
+                updateSale(tabacchinoId, transaction.getPrice(), -transaction.getQuantity());
+            } else if ("gv_sub".equalsIgnoreCase(transaction.getType())) {
+                updateSale(tabacchinoId, transaction.getPrice(), transaction.getQuantity());
             }
-        });
+        }
+
+        transaction.setDeleted(true);
+        transaction.setDeletedAt(LocalDateTime.now());
+        transactionLogRepository.save(transaction);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -437,14 +509,11 @@ public class GvService {
             tierCounts.put(pt.getPrice(), 0);
         }
 
-        for (GvSale s : sales) {
-            if (s.getQuantity() != null && s.getQuantity() > 0) {
-                tierCounts.merge(s.getPrice(), s.getQuantity(), Integer::sum);
-            }
-        }
+        boolean hasSalesTransactions = transactions.stream().anyMatch(t ->
+                "gv_add".equalsIgnoreCase(t.getType()) || "gv_sub".equalsIgnoreCase(t.getType()));
 
-        // Se per la giornata non ci fossero record in gv_sale ma ci sono nel transaction log:
-        if (tierCounts.values().stream().mapToInt(Integer::intValue).sum() == 0 && !transactions.isEmpty()) {
+        // Lo storico movimenti è la fonte contabile: conserva anche le vendite precedenti a un reset.
+        if (hasSalesTransactions) {
             for (GvTransactionLog t : transactions) {
                 if (t.getPrice() != null) {
                     if ("gv_add".equalsIgnoreCase(t.getType())) {
@@ -454,6 +523,13 @@ public class GvService {
                         int q = t.getQuantity() != null ? t.getQuantity() : 1;
                         tierCounts.merge(t.getPrice(), -q, (old, val) -> Math.max(0, old + val));
                     }
+                }
+            }
+        } else {
+            // Compatibilità con dati creati prima dell'introduzione del transaction log.
+            for (GvSale s : sales) {
+                if (s.getQuantity() != null && s.getQuantity() > 0) {
+                    tierCounts.merge(s.getPrice(), s.getQuantity(), Integer::sum);
                 }
             }
         }
@@ -622,12 +698,20 @@ public class GvService {
 
                 BigDecimal dayRev = BigDecimal.ZERO;
                 int dayTickets = 0;
-                for (GvSale s : sales) {
-                    if (dayDate.equals(s.getSaleDate()) && s.getQuantity() != null && s.getQuantity() > 0) {
-                        dayRev = dayRev.add(s.getPrice().multiply(BigDecimal.valueOf(s.getQuantity())));
-                        dayTickets += s.getQuantity();
+                for (GvTransactionLog t : transactions) {
+                    if (t.getRecordedAt() != null && dayDate.equals(t.getRecordedAt().toLocalDate()) && t.getPrice() != null) {
+                        int quantity = t.getQuantity() != null ? t.getQuantity() : 1;
+                        if ("gv_add".equalsIgnoreCase(t.getType())) {
+                            dayRev = dayRev.add(t.getPrice().multiply(BigDecimal.valueOf(quantity)));
+                            dayTickets += quantity;
+                        } else if ("gv_sub".equalsIgnoreCase(t.getType())) {
+                            dayRev = dayRev.subtract(t.getPrice().multiply(BigDecimal.valueOf(quantity)));
+                            dayTickets -= quantity;
+                        }
                     }
                 }
+                dayRev = dayRev.max(BigDecimal.ZERO);
+                dayTickets = Math.max(0, dayTickets);
 
                 BigDecimal dayWins = BigDecimal.ZERO;
                 for (GvWinning w : winnings) {
@@ -650,12 +734,20 @@ public class GvService {
 
                 BigDecimal monthRev = BigDecimal.ZERO;
                 int monthTickets = 0;
-                for (GvSale s : sales) {
-                    if (s.getSaleDate() != null && s.getSaleDate().getMonthValue() == m && s.getQuantity() != null && s.getQuantity() > 0) {
-                        monthRev = monthRev.add(s.getPrice().multiply(BigDecimal.valueOf(s.getQuantity())));
-                        monthTickets += s.getQuantity();
+                for (GvTransactionLog t : transactions) {
+                    if (t.getRecordedAt() != null && t.getRecordedAt().getMonthValue() == m && t.getPrice() != null) {
+                        int quantity = t.getQuantity() != null ? t.getQuantity() : 1;
+                        if ("gv_add".equalsIgnoreCase(t.getType())) {
+                            monthRev = monthRev.add(t.getPrice().multiply(BigDecimal.valueOf(quantity)));
+                            monthTickets += quantity;
+                        } else if ("gv_sub".equalsIgnoreCase(t.getType())) {
+                            monthRev = monthRev.subtract(t.getPrice().multiply(BigDecimal.valueOf(quantity)));
+                            monthTickets -= quantity;
+                        }
                     }
                 }
+                monthRev = monthRev.max(BigDecimal.ZERO);
+                monthTickets = Math.max(0, monthTickets);
 
                 BigDecimal monthWins = BigDecimal.ZERO;
                 for (GvWinning w : winnings) {
@@ -696,8 +788,10 @@ public class GvService {
     }
 
     private GvTransactionLogDTO toTransactionLogDTO(GvTransactionLog entity) {
-        return new GvTransactionLogDTO(entity.getId(), entity.getType(), entity.getPrice(), entity.getQuantity(),
+        GvTransactionLogDTO dto = new GvTransactionLogDTO(entity.getId(), entity.getType(), entity.getPrice(), entity.getQuantity(),
                 entity.getAmount(), entity.getTier(), entity.getLabel(), entity.getTimeRecorded(), entity.getRecordedAt());
+        dto.setRelatedEntityId(entity.getRelatedEntityId());
+        return dto;
     }
 
     private GvPurchaseDTO toPurchaseDTO(GvPurchase entity) {

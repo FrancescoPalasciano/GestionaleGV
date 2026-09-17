@@ -50,7 +50,6 @@ export default {
     indirizzoLabel: "Store Address",
     indirizzoPlaceholder: "e.g. 10 Main Street, Rome",
     rememberMe: "Remember me",
-    forgotPassword: "Forgot password?",
     loginButton: "Sign In to System",
     registerButton: "Register your Store",
     processing: "Processing...",

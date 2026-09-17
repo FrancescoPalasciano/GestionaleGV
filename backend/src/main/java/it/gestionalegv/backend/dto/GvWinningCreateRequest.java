@@ -2,6 +2,8 @@ package it.gestionalegv.backend.dto;
 
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 
 public class GvWinningCreateRequest {
@@ -10,14 +12,19 @@ public class GvWinningCreateRequest {
     @DecimalMin(value = "0.01", message = "L'importo deve essere maggiore di zero")
     private BigDecimal amount;
 
+    @Size(max = 100, message = "La fascia può contenere al massimo 100 caratteri")
     private String tier;
 
+    @Pattern(regexp = "single|closing", message = "Tipo vincita non valido")
     private String type = "single"; // "single" | "closing"
 
+    @Pattern(regexp = "^([01]\\d|2[0-3]):[0-5]\\d$", message = "Orario non valido")
     private String timeRecorded;
 
+    @Pattern(regexp = "append|replace", message = "Modalità di salvataggio non valida")
     private String mode = "append"; // "replace" | "append" (usato per chiusure serali)
 
+    @Size(max = 500, message = "La nota può contenere al massimo 500 caratteri")
     private String note;
 
     public GvWinningCreateRequest() {

@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { api } from '../services/api.js'
+import RevenueChart from './RevenueChart.jsx'
 
-export default function DashboardView({ t, user, lang = 'it' }) {
+export default function DashboardView({ t, onNavigateToGv }) {
   const [timeFilter, setTimeFilter] = useState('today')
   const [stats, setStats] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [error, setError] = useState(null)
-  const [hoveredPoint, setHoveredPoint] = useState(null)
   const [isPeriodMenuOpen, setIsPeriodMenuOpen] = useState(false)
   const periodMenuRef = useRef(null)
 
@@ -103,6 +103,31 @@ export default function DashboardView({ t, user, lang = 'it' }) {
     }
   }, [timeFilter, stats, fallbackFormattedDate])
 
+  const chartPeriodCopy = useMemo(() => {
+    if (timeFilter === 'week') {
+      return {
+        total: 'Totale settimana',
+        subtitle: 'Ricavo lordo Gratta e Vinci e aggio calcolato nella settimana corrente',
+      }
+    }
+    if (timeFilter === 'yesterday') {
+      return {
+        total: 'Totale 7 giorni',
+        subtitle: 'Andamento dei sette giorni fino alla giornata di ieri',
+      }
+    }
+    if (timeFilter === 'month') {
+      return {
+        total: 'Totale ultimi 7 giorni',
+        subtitle: 'Dettaglio degli ultimi sette giorni del periodo mensile',
+      }
+    }
+    return {
+      total: 'Totale ultimi 7 giorni',
+      subtitle: 'Andamento dei sette giorni fino a oggi',
+    }
+  }, [timeFilter])
+
   // Calcolo robusto dei 7 giorni della settimana corrente (da Lunedì a Domenica) con date esatte
   const defaultChartPoints = useMemo(() => {
     const today = new Date()
@@ -140,94 +165,11 @@ export default function DashboardView({ t, user, lang = 'it' }) {
     })
   }, [])
 
-  // Calcolo coordinate e vettori per il grafico SVG dinamico a tutta larghezza
-  const chartConfig = useMemo(() => {
-    const points = defaultChartPoints.map((defPt, idx) => {
-      const serverPt = stats?.chartPoints?.[idx]
-      if (!serverPt) return defPt
-
-      return {
-        ...defPt,
-        ...serverPt,
-        dayLabel: serverPt.dayLabel || defPt.dayLabel,
-        dayFullName: serverPt.dayFullName || defPt.dayFullName,
-        formattedDate: serverPt.formattedDate || defPt.formattedDate,
-        isToday: serverPt.isToday !== undefined ? serverPt.isToday : defPt.isToday,
-        revenue: Number(serverPt.revenue) || 0,
-        tickets: Number(serverPt.tickets) || 0,
-        profit: Number(serverPt.profit) || 0,
-      }
-    })
-
-    // Dimensioni viewBox SVG proporzionate per coprire l'intera card senza barre laterali
-    const width = 1000
-    const height = 320
-    const padLeft = 65
-    const padRight = 45
-    const padTop = 28
-    const padBottom = 80 // Spazio confortevole per giorno della settimana, data e badge Oggi
-    const gridBottom = height - padBottom // 240
-
-    const usableWidth = width - padLeft - padRight
-    const usableHeight = gridBottom - padTop
-    const stepX = usableWidth / (points.length - 1)
-
-    const revenues = points.map((p) => p.revenue)
-    const maxValRaw = Math.max(...revenues, 50)
-    // Arrotondamento superiore per scala gradevole (€50, €100, €150, €300...)
-    const maxVal = Math.ceil(maxValRaw / 50) * 50
-
-    const coords = points.map((p, idx) => {
-      const val = p.revenue
-      const x = Math.round(padLeft + idx * stepX)
-      const ratio = maxVal > 0 ? val / maxVal : 0
-      const y = Math.round(gridBottom - ratio * usableHeight)
-      return {
-        ...p,
-        x,
-        y,
-        val,
-        profitVal: p.profit,
-        ticketsVal: p.tickets,
-      }
-    })
-
-    // Costruzione stringhe path per SVG
-    const linePath = coords.reduce((acc, pt, i) => {
-      return i === 0 ? `M ${pt.x},${pt.y}` : `${acc} L ${pt.x},${pt.y}`
-    }, '')
-
-    const areaPath = coords.length > 0
-      ? `${linePath} L ${coords[coords.length - 1].x},${gridBottom} L ${coords[0].x},${gridBottom} Z`
-      : ''
-
-    // 4 linee orizzontali di riferimento
-    const gridLines = [
-      { y: gridBottom, val: 0 },
-      { y: Math.round(gridBottom - usableHeight * 0.33), val: Math.round(maxVal * 0.33) },
-      { y: Math.round(gridBottom - usableHeight * 0.66), val: Math.round(maxVal * 0.66) },
-      { y: padTop, val: maxVal },
-    ]
-
-    const totalWeekRevenue = revenues.reduce((a, b) => a + b, 0)
-    const totalWeekProfit = points.reduce((acc, p) => acc + p.profit, 0)
-
-    return {
-      width,
-      height,
-      padLeft,
-      padRight,
-      padTop,
-      gridBottom,
-      coords,
-      linePath,
-      areaPath,
-      gridLines,
-      maxVal,
-      totalWeekRevenue,
-      totalWeekProfit,
-    }
-  }, [stats, defaultChartPoints])
+  const chartPoints = useMemo(() => defaultChartPoints.map((fallback, index) => ({
+    ...fallback,
+    ...stats?.chartPoints?.[index],
+  })), [stats, defaultChartPoints])
+  const totalRevenue = chartPoints.reduce((sum, point) => sum + (Number(point.revenue) || 0), 0)
 
   return (
     <div className="dashboard-mockup-wrapper" id="view-dashboard-container">
@@ -246,6 +188,7 @@ export default function DashboardView({ t, user, lang = 'it' }) {
         </div>
 
         {/* Dropdown Personalizzato Selezione Periodo */}
+        <div className="dash-header-tools"><button type="button" className="gv-btn-primary dashboard-open-counter" onClick={onNavigateToGv}><span aria-hidden="true">+</span> Apri il banco</button>
         <div className="dash-filter-dropdown-wrapper" ref={periodMenuRef}>
           <div className="dash-custom-select-container">
             <button
@@ -265,7 +208,7 @@ export default function DashboardView({ t, user, lang = 'it' }) {
                   height="15"
                   viewBox="0 0 24 24"
                   fill="none"
-                  stroke="#0F6B4F"
+                  stroke="var(--color-primary)"
                   strokeWidth="2"
                   strokeLinecap="round"
                   strokeLinejoin="round"
@@ -331,7 +274,7 @@ export default function DashboardView({ t, user, lang = 'it' }) {
                           height="16"
                           viewBox="0 0 24 24"
                           fill="none"
-                          stroke="#0F6B4F"
+                          stroke="var(--color-primary)"
                           strokeWidth="2.5"
                           strokeLinecap="round"
                           strokeLinejoin="round"
@@ -346,6 +289,7 @@ export default function DashboardView({ t, user, lang = 'it' }) {
               </div>
             )}
           </div>
+        </div>
         </div>
       </header>
 
@@ -372,7 +316,7 @@ export default function DashboardView({ t, user, lang = 'it' }) {
             <span className="dash-card-label">Gratta e Vinci venduti</span>
             <div className="dash-card-icon-wrap" aria-hidden="true">
               {/* Ticket Icon SVG */}
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0F6B4F" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2z" />
                 <path d="M13 5v2" />
                 <path d="M13 17v2" />
@@ -454,7 +398,7 @@ export default function DashboardView({ t, user, lang = 'it' }) {
             <span className="dash-card-label">Guadagno parziale</span>
             <div className="dash-card-icon-wrap" aria-hidden="true">
               {/* Trending Up Icon SVG */}
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0F6B4F" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="23 6 13.5 15.5 8.5 10.5 1 18" />
                 <polyline points="17 6 23 6 23 12" />
               </svg>
@@ -485,256 +429,35 @@ export default function DashboardView({ t, user, lang = 'it' }) {
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                 <h2 className="dash-section-title">Andamento economico</h2>
-                {chartConfig.totalWeekRevenue > 0 && (
+                {totalRevenue > 0 && (
                   <span className="dash-week-summary-pill">
-                    Totale settimanale: € {chartConfig.totalWeekRevenue.toFixed(2).replace('.', ',')}
+                    {chartPeriodCopy.total}: € {totalRevenue.toFixed(2).replace('.', ',')}
                   </span>
                 )}
               </div>
               <p className="dash-section-subtitle">
-                Ricavo lordo settimanale Gratta e Vinci e aggio calcolato (Lunedì – Domenica)
+                {chartPeriodCopy.subtitle}
               </p>
             </div>
 
             <div className="dash-chart-legend">
               <span className="legend-item">
-                <span className="legend-line" style={{ background: '#0F6B4F' }} />
+                <span className="legend-line" style={{ background: 'var(--color-primary)' }} />
                 Incasso lordo (€)
               </span>
               <span className="legend-item">
-                <span className="legend-dot" style={{ background: '#F5C400' }} />
+                <span className="legend-dot" style={{ background: 'var(--color-chart-secondary)' }} />
                 Aggio netto 8%
               </span>
             </div>
           </div>
 
-          <div className="dash-chart-container">
-            <svg
-              className="trend-svg"
-              viewBox={`0 0 ${chartConfig.width} ${chartConfig.height}`}
-              preserveAspectRatio="none"
-              aria-label="Grafico andamento economico settimanale con giorni e date"
-            >
-              <defs>
-                {/* Gradiente sfumato sotto la linea verde */}
-                <linearGradient id="greenAreaGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#0F6B4F" stopOpacity="0.22" />
-                  <stop offset="85%" stopColor="#0F6B4F" stopOpacity="0.02" />
-                  <stop offset="100%" stopColor="#0F6B4F" stopOpacity="0" />
-                </linearGradient>
-              </defs>
-
-              {/* Linee orizzontali di riferimento con importi in euro */}
-              {chartConfig.gridLines.map((g, idx) => (
-                <g key={idx}>
-                  <line
-                    x1={chartConfig.padLeft}
-                    y1={g.y}
-                    x2={chartConfig.width - chartConfig.padRight}
-                    y2={g.y}
-                    stroke="#e8efe9"
-                    strokeWidth="1"
-                    strokeDasharray={idx === 0 ? 'none' : '4 4'}
-                  />
-                  <text
-                    x={chartConfig.padLeft - 10}
-                    y={g.y + 4}
-                    textAnchor="end"
-                    fontSize="11"
-                    fontWeight="600"
-                    fill="#839189"
-                    fontFamily="inherit"
-                  >
-                    €{g.val}
-                  </text>
-                </g>
-              ))}
-
-              {/* Linea verticale tratteggiata di focus sulla colonna attiva */}
-              {hoveredPoint !== null && chartConfig.coords[hoveredPoint] && (
-                <line
-                  x1={chartConfig.coords[hoveredPoint].x}
-                  y1={chartConfig.padTop}
-                  x2={chartConfig.coords[hoveredPoint].x}
-                  y2={chartConfig.gridBottom}
-                  stroke="#0F6B4F"
-                  strokeWidth="1.5"
-                  strokeDasharray="4 4"
-                  opacity="0.5"
-                />
-              )}
-
-              {/* Area ombreggiata sotto il tracciato */}
-              {chartConfig.areaPath && (
-                <path d={chartConfig.areaPath} fill="url(#greenAreaGrad)" />
-              )}
-
-              {/* Tracciato continuo verde principale */}
-              {chartConfig.linePath && (
-                <path
-                  d={chartConfig.linePath}
-                  fill="none"
-                  stroke="#0F6B4F"
-                  strokeWidth="3.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              )}
-
-              {/* Colonne per ciascun giorno della settimana (Punti, Label Giorno, Data e Badge Oggi) */}
-              {chartConfig.coords.map((pt, idx) => {
-                const isHovered = hoveredPoint === idx
-                const colWidth = chartConfig.width / 7
-
-                return (
-                  <g key={idx}>
-                    {/* Tick marker verticale sulla linea di base €0 */}
-                    <line
-                      x1={pt.x}
-                      y1={chartConfig.gridBottom}
-                      x2={pt.x}
-                      y2={chartConfig.gridBottom + 6}
-                      stroke={pt.isToday ? '#0F6B4F' : '#dce4de'}
-                      strokeWidth={pt.isToday ? 2 : 1}
-                    />
-
-                    {/* Badge e testi per Giorno della settimana e Data */}
-                    {pt.isToday ? (
-                      <g>
-                        {/* Badge di evidenziazione per la giornata odierna */}
-                        <rect
-                          x={pt.x - 34}
-                          y={chartConfig.gridBottom + 10}
-                          width="68"
-                          height="54"
-                          rx="8"
-                          fill="#eef7f2"
-                          stroke="#0F6B4F"
-                          strokeWidth="1.5"
-                        />
-                        {/* Giorno della settimana */}
-                        <text
-                          x={pt.x}
-                          y={chartConfig.gridBottom + 27}
-                          textAnchor="middle"
-                          fontSize="13"
-                          fontWeight="800"
-                          fill="#0F6B4F"
-                          fontFamily="inherit"
-                        >
-                          {pt.dayLabel}
-                        </text>
-                        {/* Data della settimana */}
-                        <text
-                          x={pt.x}
-                          y={chartConfig.gridBottom + 43}
-                          textAnchor="middle"
-                          fontSize="11"
-                          fontWeight="700"
-                          fill="#0F6B4F"
-                          fontFamily="inherit"
-                        >
-                          {pt.formattedDate}
-                        </text>
-                        {/* Indicatore "OGGI" */}
-                        <text
-                          x={pt.x}
-                          y={chartConfig.gridBottom + 56}
-                          textAnchor="middle"
-                          fontSize="8.5"
-                          fontWeight="800"
-                          fill="#0F6B4F"
-                          fontFamily="inherit"
-                          letterSpacing="0.6"
-                        >
-                          OGGI
-                        </text>
-                      </g>
-                    ) : (
-                      <g>
-                        {/* Giorno della settimana (Lun, Mar, Gio, Ven...) */}
-                        <text
-                          x={pt.x}
-                          y={chartConfig.gridBottom + 28}
-                          textAnchor="middle"
-                          fontSize="13"
-                          fontWeight={isHovered ? '800' : '700'}
-                          fill={isHovered ? '#0F6B4F' : '#171717'}
-                          fontFamily="inherit"
-                        >
-                          {pt.dayLabel}
-                        </text>
-                        {/* Data della settimana (es. 7 set, 8 set...) */}
-                        <text
-                          x={pt.x}
-                          y={chartConfig.gridBottom + 46}
-                          textAnchor="middle"
-                          fontSize="11"
-                          fontWeight={isHovered ? '700' : '500'}
-                          fill={isHovered ? '#0F6B4F' : '#718178'}
-                          fontFamily="inherit"
-                        >
-                          {pt.formattedDate}
-                        </text>
-                      </g>
-                    )}
-
-                    {/* Area trasparente cliccabile/hoverable sull'intera colonna */}
-                    <rect
-                      x={pt.x - colWidth / 2}
-                      y="0"
-                      width={colWidth}
-                      height={chartConfig.height}
-                      fill="transparent"
-                      style={{ cursor: 'pointer' }}
-                      onMouseEnter={() => setHoveredPoint(idx)}
-                      onMouseLeave={() => setHoveredPoint(null)}
-                    />
-
-                    {/* Punto dati visibile sul tracciato */}
-                    {pt.isToday && (
-                      <circle
-                        cx={pt.x}
-                        cy={pt.y}
-                        r="9"
-                        fill="rgba(15, 107, 79, 0.15)"
-                      />
-                    )}
-                    <circle
-                      cx={pt.x}
-                      cy={pt.y}
-                      r={isHovered ? 6.5 : (pt.isToday ? 5.5 : 4.5)}
-                      fill="#ffffff"
-                      stroke="#0F6B4F"
-                      strokeWidth={isHovered ? 3.5 : (pt.isToday ? 3 : 2.5)}
-                      style={{ transition: 'all 0.15s ease' }}
-                    />
-                  </g>
-                )
-              })}
-            </svg>
-
-            {/* Tooltip interattivo al passaggio del mouse sul punto */}
-            {hoveredPoint !== null && chartConfig.coords[hoveredPoint] && (
-              <div
-                className="dash-chart-tooltip"
-                style={{
-                  left: `${(chartConfig.coords[hoveredPoint].x / chartConfig.width) * 100}%`,
-                  top: `${(chartConfig.coords[hoveredPoint].y / chartConfig.height) * 100}%`,
-                }}
-              >
-                <div style={{ fontWeight: '800', fontSize: '13px', marginBottom: '2px' }}>
-                  {chartConfig.coords[hoveredPoint].dayFullName} {chartConfig.coords[hoveredPoint].formattedDate}
-                  {chartConfig.coords[hoveredPoint].isToday && ' (Oggi)'}
-                </div>
-                <div>Incasso: € {chartConfig.coords[hoveredPoint].val.toFixed(2).replace('.', ',')}</div>
-                <div>Biglietti venduti: {chartConfig.coords[hoveredPoint].ticketsVal}</div>
-                <div style={{ color: '#F5C400', fontWeight: '700' }}>
-                  Aggio netto 8%: € {chartConfig.coords[hoveredPoint].profitVal.toFixed(2).replace('.', ',')}
-                </div>
-              </div>
-            )}
-          </div>
+          <RevenueChart
+            points={chartPoints}
+            variant="bar"
+            loading={isLoading && !stats}
+            label="Incasso lordo e aggio negli ultimi sette giorni"
+          />
         </section>
 
         {/* Sezione Destra: Ultime Operazioni Reali dal DB */}

@@ -1,77 +1,11 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import { api } from '../services/api.js'
+import RevenueChart from './RevenueChart.jsx'
 
 // Formattazione valuta italiana standard
 function formatEuro(val) {
   const num = Number(val || 0)
   return '€ ' + num.toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-}
-
-// Helper per generare curve morbide e naturali (Catmull-Rom / cubic bezier)
-function createSmoothPath(pts, yProp) {
-  if (!pts || pts.length === 0) return ''
-  if (pts.length === 1) return `M ${pts[0].x.toFixed(1)} ${pts[0][yProp].toFixed(1)}`
-  if (pts.length === 2) {
-    return `M ${pts[0].x.toFixed(1)} ${pts[0][yProp].toFixed(1)} L ${pts[1].x.toFixed(1)} ${pts[1][yProp].toFixed(1)}`
-  }
-
-  let d = `M ${pts[0].x.toFixed(1)} ${pts[0][yProp].toFixed(1)}`
-  const tension = 0.22 // Curvatura bilanciata e sobria, ideale per grafici contabili
-
-  for (let i = 0; i < pts.length - 1; i++) {
-    const p0 = pts[i === 0 ? 0 : i - 1]
-    const p1 = pts[i]
-    const p2 = pts[i + 1]
-    const p3 = pts[i + 2 >= pts.length ? pts.length - 1 : i + 2]
-
-    const cp1x = p1.x + (p2.x - p0.x) * tension
-    const cp1y = p1[yProp] + (p2[yProp] - p0[yProp]) * tension
-    const cp2x = p2.x - (p3.x - p1.x) * tension
-    const cp2y = p2[yProp] - (p3[yProp] - p1[yProp]) * tension
-
-    d += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2[yProp].toFixed(1)}`
-  }
-  return d
-}
-
-function createAreaPath(pts, yProp, baselineY) {
-  if (!pts || pts.length === 0) return ''
-  const linePath = createSmoothPath(pts, yProp)
-  const lastX = pts[pts.length - 1].x.toFixed(1)
-  const firstX = pts[0].x.toFixed(1)
-  return `${linePath} L ${lastX} ${baselineY.toFixed(1)} L ${firstX} ${baselineY.toFixed(1)} Z`
-}
-
-// Calcolo scaglioni asse Y con numeri tondi puliti (mai numeri strani come 17 o 33)
-function calculateNiceTicks(maxFound) {
-  if (!maxFound || maxFound <= 0) {
-    return {
-      maxVal: 60,
-      ticks: [0, 20, 40, 60],
-    }
-  }
-
-  const targetIntervals = 4
-  const rawStep = (maxFound * 1.15) / targetIntervals
-  const niceSteps = [
-    5, 10, 15, 20, 25, 50, 75, 100, 150, 200, 250, 500, 750, 1000, 1500, 2000, 2500, 5000, 10000
-  ]
-
-  let step = niceSteps[niceSteps.length - 1]
-  for (const s of niceSteps) {
-    if (s >= rawStep) {
-      step = s
-      break
-    }
-  }
-
-  const maxVal = step * targetIntervals
-  const ticks = []
-  for (let i = 0; i <= targetIntervals; i++) {
-    ticks.push(i * step)
-  }
-
-  return { maxVal, ticks }
 }
 
 function formatNumber(val) {
@@ -100,8 +34,6 @@ export default function StatisticheView({ t, user }) {
   // Visualizzazione curva vincite nel grafico
   const [showWinningsCurve, setShowWinningsCurve] = useState(true)
 
-  // Punto attivo in hover sul grafico
-  const [hoveredPointIndex, setHoveredPointIndex] = useState(null)
 
   // Caricamento dati dal backend
   const fetchStatistics = useCallback(async () => {
@@ -650,105 +582,6 @@ export default function StatisticheView({ t, user }) {
     }, 250)
   }, [stats, period, refDate, displayedPeriodLabel, user])
 
-  // Configurazione del Grafico SVG ad alta leggibilità (proporzionato, non schiacciato)
-  const chartConfig = useMemo(() => {
-    // Proporzioni ottimali: altezza aumentata a 360px per evitare l'effetto schiacciato
-    const width = 1000
-    const height = 360
-    const padLeft = 70
-    const padRight = 35
-    const padTop = 32
-    const padBottom = 54
-    const baselineY = height - padBottom // 306px
-
-    const points = stats?.chartPoints || []
-    if (points.length === 0) {
-      return {
-        width,
-        height,
-        padLeft,
-        padRight,
-        padTop,
-        padBottom,
-        baselineY,
-        maxVal: 60,
-        isZeroState: true,
-        coords: [],
-        gridLines: [
-          { val: 0, y: baselineY },
-          { val: 20, y: baselineY - (height - padTop - padBottom) * 0.33 },
-          { val: 40, y: baselineY - (height - padTop - padBottom) * 0.66 },
-          { val: 60, y: padTop },
-        ],
-      }
-    }
-
-    // Calcolo valore massimo tra incasso lordo e vincite
-    let maxFound = 0
-    points.forEach((p) => {
-      if (p.revenue > maxFound) maxFound = p.revenue
-      if (p.winnings > maxFound) maxFound = p.winnings
-    })
-
-    const isZeroState = maxFound === 0
-    const { maxVal, ticks } = calculateNiceTicks(maxFound)
-
-    const plotWidth = width - padLeft - padRight
-    const plotHeight = height - padTop - padBottom
-
-    // Linee orizzontali con scaglioni puliti e precisi
-    const gridLines = ticks.map((val) => {
-      const ratio = val / maxVal
-      const y = baselineY - ratio * plotHeight
-      return { val, y }
-    })
-
-    // Calcolo coordinate dei punti
-    const n = points.length
-    const coords = points.map((p, idx) => {
-      const x = n === 1 ? padLeft + plotWidth / 2 : padLeft + (idx / (n - 1)) * plotWidth
-      const revRatio = Math.min(1, Math.max(0, (p.revenue || 0) / maxVal))
-      const yRev = baselineY - revRatio * plotHeight
-
-      const aggRatio = Math.min(1, Math.max(0, (p.aggio || 0) / maxVal))
-      const yAgg = baselineY - aggRatio * plotHeight
-
-      const winRatio = Math.min(1, Math.max(0, (p.winnings || 0) / maxVal))
-      const yWin = baselineY - winRatio * plotHeight
-
-      return {
-        ...p,
-        x,
-        yRev,
-        yAgg,
-        yWin,
-      }
-    })
-
-    // Curve morbide spline (più leggibili ed eleganti dei poligoni a spigoli vivi)
-    const areaPath = createAreaPath(coords, 'yRev', baselineY)
-    const revLinePath = createSmoothPath(coords, 'yRev')
-    const aggLinePath = createSmoothPath(coords, 'yAgg')
-    const winLinePath = createSmoothPath(coords, 'yWin')
-
-    return {
-      width,
-      height,
-      padLeft,
-      padRight,
-      padTop,
-      padBottom,
-      baselineY,
-      maxVal,
-      isZeroState,
-      coords,
-      gridLines,
-      areaPath,
-      revLinePath,
-      aggLinePath,
-      winLinePath,
-    }
-  }, [stats])
 
   return (
     <div className="stats-view-container">
@@ -817,7 +650,7 @@ export default function StatisticheView({ t, user }) {
             </button>
 
             <div className="stats-date-badge" title="Data selezionata">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#0F6B4F" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
                 <line x1="16" y1="2" x2="16" y2="6" />
                 <line x1="8" y1="2" x2="8" y2="6" />
@@ -890,7 +723,7 @@ export default function StatisticheView({ t, user }) {
           <div className="stats-kpi-header">
             <span className="stats-kpi-label">Incasso Lordo Vendite</span>
             <div className="stats-kpi-icon-wrap" aria-hidden="true">
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#0F6B4F" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2z" />
                 <path d="M12 9v6" />
               </svg>
@@ -909,7 +742,7 @@ export default function StatisticheView({ t, user }) {
           <div className="stats-kpi-header">
             <span className="stats-kpi-label">Aggio Netto Rivendita (8%)</span>
             <div className="stats-kpi-icon-wrap icon-primary" aria-hidden="true">
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#0F6B4F" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="23 6 13.5 15.5 8.5 10.5 1 18" />
                 <polyline points="17 6 23 6 23 12" />
               </svg>
@@ -947,7 +780,7 @@ export default function StatisticheView({ t, user }) {
           <div className="stats-kpi-header">
             <span className="stats-kpi-label">Saldo Flusso Cassa</span>
             <div className="stats-kpi-icon-wrap" aria-hidden="true">
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#0F6B4F" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <rect x="2" y="4" width="20" height="16" rx="2" />
                 <line x1="2" y1="10" x2="22" y2="10" />
               </svg>
@@ -966,17 +799,17 @@ export default function StatisticheView({ t, user }) {
           <div className="stats-kpi-header">
             <span className="stats-kpi-label">Forniture Stecche (Logista)</span>
             <div className="stats-kpi-icon-wrap" aria-hidden="true">
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#0F6B4F" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <line x1="16.5" y1="9.4" x2="7.5" y2="4.21" />
                 <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
               </svg>
             </div>
           </div>
           <div className="stats-kpi-value">
-            {isLoading ? '—' : `${formatNumber(stats?.totalStecche)} st · ${formatEuro(stats?.totalPurchases)}`}
+            {isLoading ? '—' : formatEuro(stats?.totalPurchases)}
           </div>
           <div className="stats-kpi-sub">
-            {isLoading ? 'Caricamento...' : `${formatNumber(stats?.totalSteccheTickets)} biglietti caricati`}
+            {isLoading ? 'Caricamento...' : `${formatNumber(stats?.totalStecche)} stecche · ${formatNumber(stats?.totalSteccheTickets)} biglietti caricati`}
           </div>
         </div>
 
@@ -985,7 +818,7 @@ export default function StatisticheView({ t, user }) {
           <div className="stats-kpi-header">
             <span className="stats-kpi-label">Scontrino Medio G&V</span>
             <div className="stats-kpi-icon-wrap" aria-hidden="true">
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#0F6B4F" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="10" />
                 <line x1="12" y1="6" x2="12" y2="12" />
                 <line x1="12" y1="12" x2="16" y2="16" />
@@ -1029,6 +862,7 @@ export default function StatisticheView({ t, user }) {
               <button
                 type="button"
                 className={`stats-legend-toggle ${showWinningsCurve ? 'active' : ''}`}
+                aria-pressed={showWinningsCurve}
                 onClick={() => setShowWinningsCurve(!showWinningsCurve)}
                 title="Attiva/Disattiva curva vincite"
               >
@@ -1039,237 +873,13 @@ export default function StatisticheView({ t, user }) {
           </div>
         </div>
 
-        {/* Grafico SVG Responsivo con Griglia, Stato Vuoto e Tooltip */}
-        <div className={`stats-chart-viewport-wrapper ${period === 'month' ? 'scrollable-month' : ''}`}>
-          {period === 'month' && (
-            <div className="stats-mobile-scroll-hint" aria-hidden="true">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="17 11 21 15 17 19" />
-                <line x1="21" y1="15" x2="9" y2="15" />
-                <polyline points="7 13 3 9 7 5" />
-                <line x1="3" y1="9" x2="15" y2="9" />
-              </svg>
-              <span>Scorri in orizzontale per consultare tutti i giorni del mese</span>
-            </div>
-          )}
-
-          <div className="stats-svg-container">
-            {/* Avviso discreto se nel periodo selezionato non ci sono ancora vendite (es. inizio giornata) */}
-            {chartConfig.isZeroState && !isLoading && (
-              <div className="stats-chart-zero-hint" role="status">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#0F6B4F" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <circle cx="12" cy="12" r="10" />
-                  <line x1="12" y1="8" x2="12" y2="12" />
-                  <line x1="12" y1="16" x2="12.01" y2="16" />
-                </svg>
-                <span>Nessuna vendita registrata nel periodo selezionato</span>
-              </div>
-            )}
-
-            <svg
-              className="stats-trend-svg"
-              viewBox={`0 0 ${chartConfig.width} ${chartConfig.height}`}
-              preserveAspectRatio="none"
-              aria-label="Grafico andamento temporale"
-            >
-              <defs>
-                {/* Gradiente sfumato verde sotto l'incasso */}
-                <linearGradient id="statsGreenGradient" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#0F6B4F" stopOpacity="0.20" />
-                  <stop offset="85%" stopColor="#0F6B4F" stopOpacity="0.02" />
-                  <stop offset="100%" stopColor="#0F6B4F" stopOpacity="0" />
-                </linearGradient>
-              </defs>
-
-              {/* Linee orizzontali di riferimento con importi in euro tondi e puliti */}
-              {chartConfig.gridLines.map((g, idx) => (
-                <g key={idx}>
-                  <line
-                    x1={chartConfig.padLeft}
-                    y1={g.y}
-                    x2={chartConfig.width - chartConfig.padRight}
-                    y2={g.y}
-                    stroke="#e8efe9"
-                    strokeWidth="1"
-                    strokeDasharray={idx === 0 ? 'none' : '3 3'}
-                  />
-                  <text
-                    x={chartConfig.padLeft - 10}
-                    y={g.y + 4}
-                    textAnchor="end"
-                    fontSize="11"
-                    fontWeight="600"
-                    fill="#839189"
-                  >
-                    €{g.val}
-                  </text>
-                </g>
-              ))}
-
-              {/* Area sfumata verde */}
-              {chartConfig.areaPath && (
-                <path d={chartConfig.areaPath} fill="url(#statsGreenGradient)" />
-              )}
-
-              {/* Curva Vincite (se attivata) con spline morbida */}
-              {showWinningsCurve && chartConfig.winLinePath && (
-                <path
-                  d={chartConfig.winLinePath}
-                  fill="none"
-                  stroke="#c97108"
-                  strokeWidth="2"
-                  strokeDasharray="4 4"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              )}
-
-              {/* Curva Incasso Lordo fluida */}
-              {chartConfig.revLinePath && (
-                <path
-                  d={chartConfig.revLinePath}
-                  fill="none"
-                  stroke="#0F6B4F"
-                  strokeWidth="2.8"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              )}
-
-              {/* Curva Aggio 8% fluida */}
-              {chartConfig.aggLinePath && (
-                <path
-                  d={chartConfig.aggLinePath}
-                  fill="none"
-                  stroke="#F5C400"
-                  strokeWidth="2.4"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              )}
-
-              {/* Linea verticale indicatrice se punto in hover */}
-              {hoveredPointIndex !== null && chartConfig.coords[hoveredPointIndex] && (
-                <line
-                  x1={chartConfig.coords[hoveredPointIndex].x}
-                  y1={chartConfig.padTop}
-                  x2={chartConfig.coords[hoveredPointIndex].x}
-                  y2={chartConfig.height - chartConfig.padBottom}
-                  stroke="#0F6B4F"
-                  strokeWidth="1.2"
-                  strokeDasharray="3 3"
-                />
-              )}
-
-              {/* Punti dati e aree di cattura mouse/touch */}
-              {chartConfig.coords.map((pt, idx) => {
-                const isHovered = hoveredPointIndex === idx
-                return (
-                  <g
-                    key={idx}
-                    className="stats-chart-point-group"
-                    onMouseEnter={() => setHoveredPointIndex(idx)}
-                    onMouseLeave={() => setHoveredPointIndex(null)}
-                    onClick={() => setHoveredPointIndex(isHovered ? null : idx)}
-                  >
-                    {/* Cerchietto punto incasso */}
-                    <circle
-                      cx={pt.x}
-                      cy={pt.yRev}
-                      r={isHovered ? 5.5 : pt.revenue > 0 ? 3.5 : 2.5}
-                      fill="#ffffff"
-                      stroke="#0F6B4F"
-                      strokeWidth={isHovered ? 2.5 : 2}
-                    />
-
-                    {/* Cerchietto punto aggio */}
-                    {pt.aggio > 0 && (
-                      <circle
-                        cx={pt.x}
-                        cy={pt.yAgg}
-                        r={isHovered ? 4.5 : 2.5}
-                        fill="#F5C400"
-                        stroke="#785900"
-                        strokeWidth="1"
-                      />
-                    )}
-
-                    {/* Cerchietto vincite */}
-                    {showWinningsCurve && pt.winnings > 0 && (
-                      <circle
-                        cx={pt.x}
-                        cy={pt.yWin}
-                        r={isHovered ? 4.5 : 2.5}
-                        fill="#ffffff"
-                        stroke="#c97108"
-                        strokeWidth="1.8"
-                      />
-                    )}
-
-                    {/* Area invisibile allargata per facilitare hover e tap */}
-                    <rect
-                      x={pt.x - (chartConfig.width / (chartConfig.coords.length * 2))}
-                      y={chartConfig.padTop}
-                      width={chartConfig.width / chartConfig.coords.length}
-                      height={chartConfig.height - chartConfig.padTop - chartConfig.padBottom}
-                      fill="transparent"
-                      style={{ cursor: 'pointer' }}
-                    />
-
-                    {/* Etichette asse X (mostrate con diradamento pulito nel mese) */}
-                    {(period === 'day' ||
-                      period === 'year' ||
-                      (period === 'month' && (idx % 2 === 0 || idx === chartConfig.coords.length - 1))) && (
-                      <text
-                        x={pt.x}
-                        y={chartConfig.height - chartConfig.padBottom + 20}
-                        textAnchor="middle"
-                        fontSize={period === 'month' ? '10' : '11.5'}
-                        fontWeight={isHovered ? '700' : '600'}
-                        fill={isHovered ? '#0F6B4F' : '#738379'}
-                      >
-                        {pt.label}
-                      </text>
-                    )}
-                  </g>
-                )
-              })}
-            </svg>
-
-            {/* Tooltip flottante dinamico ancorato e vincolato ai margini per mobile */}
-            {hoveredPointIndex !== null && chartConfig.coords[hoveredPointIndex] && (
-              <div
-                className="stats-chart-tooltip"
-                style={{
-                  left: `${Math.max(16, Math.min(84, (chartConfig.coords[hoveredPointIndex].x / chartConfig.width) * 100))}%`,
-                  top: `${Math.max(8, (chartConfig.coords[hoveredPointIndex].yRev / chartConfig.height) * 100 - 24)}%`,
-                }}
-              >
-                <div className="stats-tooltip-title">
-                  {chartConfig.coords[hoveredPointIndex].fullLabel || chartConfig.coords[hoveredPointIndex].label}
-                </div>
-                <div className="stats-tooltip-row">
-                  <span className="dot green" />
-                  <span>Incasso:</span>
-                  <strong>{formatEuro(chartConfig.coords[hoveredPointIndex].revenue)}</strong>
-                  <span className="tooltip-tickets">({chartConfig.coords[hoveredPointIndex].tickets} pz)</span>
-                </div>
-                <div className="stats-tooltip-row">
-                  <span className="dot yellow" />
-                  <span>Aggio (8%):</span>
-                  <strong className="text-green">{formatEuro(chartConfig.coords[hoveredPointIndex].aggio)}</strong>
-                </div>
-                {chartConfig.coords[hoveredPointIndex].winnings > 0 && (
-                  <div className="stats-tooltip-row">
-                    <span className="dot amber" />
-                    <span>Vincite:</span>
-                    <strong className="text-amber">{formatEuro(chartConfig.coords[hoveredPointIndex].winnings)}</strong>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
+        <RevenueChart
+          key={`${period}-${refDate}`}
+          points={stats?.chartPoints || []}
+          showWinnings={showWinningsCurve}
+          loading={isLoading}
+          label="Andamento di incasso, aggio e vincite nel periodo selezionato"
+        />
       </section>
 
       {/* ── SEZIONE 3: GRIGLIA A 2 COLONNE (RIPARTIZIONE FASCE & ANALISI FLUSSI) ─ */}
@@ -1323,7 +933,7 @@ export default function StatisticheView({ t, user }) {
                         <td style={{ textAlign: 'right', fontWeight: 700, color: '#171717' }}>
                           {formatEuro(tier.revenue)}
                         </td>
-                        <td style={{ textAlign: 'right', fontWeight: 700, color: '#0F6B4F' }}>
+                        <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--color-primary)' }}>
                           {formatEuro(tier.aggio)}
                         </td>
                         <td>

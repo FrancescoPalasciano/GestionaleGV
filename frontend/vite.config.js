@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-const BACKEND_TARGET = process.env.BACKEND_URL || 'http://api-gestionale.51.38.98.213.sslip.io'
+const BACKEND_TARGET = process.env.BACKEND_URL || 'http://localhost:8080'
 
 export default defineConfig({
   plugins: [react()],
@@ -28,4 +28,3 @@ export default defineConfig({
     allowedHosts: true,
   },
 })
-

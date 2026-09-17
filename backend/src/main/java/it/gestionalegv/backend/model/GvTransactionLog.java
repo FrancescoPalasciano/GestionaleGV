@@ -46,6 +46,9 @@ public class GvTransactionLog {
     @Column(name = "recorded_at", nullable = false)
     private LocalDateTime recordedAt;
 
+    @Column(name = "related_entity_id")
+    private Long relatedEntityId;
+
     @Column(name = "deleted")
     private Boolean deleted = false;
 
@@ -159,6 +162,14 @@ public class GvTransactionLog {
 
     public void setRecordedAt(LocalDateTime recordedAt) {
         this.recordedAt = recordedAt;
+    }
+
+    public Long getRelatedEntityId() {
+        return relatedEntityId;
+    }
+
+    public void setRelatedEntityId(Long relatedEntityId) {
+        this.relatedEntityId = relatedEntityId;
     }
 
     public Boolean getDeleted() {

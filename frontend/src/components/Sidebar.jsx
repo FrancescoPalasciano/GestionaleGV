@@ -1,4 +1,5 @@
-import React from 'react'
+import React, { useRef } from 'react'
+import useOverlayFocus from '../hooks/useOverlayFocus.js'
 
 export function IconDashboard({ className }) {
   return (
@@ -23,9 +24,7 @@ export function IconGrattaEVinci({ className }) {
 export function IconStatistiche({ className }) {
   return (
     <svg className={className} width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="4" y="4" width="16" height="16" rx="2" />
-      <line x1="9" y1="4" x2="9" y2="20" />
-      <line x1="15" y1="4" x2="15" y2="20" />
+      <path d="M4 4v16h16M9 15v-4M14 15V7M19 15v-6" />
     </svg>
   )
 }
@@ -61,6 +60,8 @@ export default function Sidebar({
   isCollapsed,
   onToggleCollapse
 }) {
+  const sidebarRef = useRef(null)
+  useOverlayFocus(sidebarRef, isOpen, onClose)
   const navItems = [
     { id: 'dashboard', label: t.nav.dashboard, icon: IconDashboard },
     { id: 'grattaEVinci', label: t.nav.grattaEVinci, icon: IconGrattaEVinci },
@@ -87,12 +88,22 @@ export default function Sidebar({
       )}
 
       <aside 
+        ref={sidebarRef}
+        id="app-navigation"
         className={`app-sidebar ${isCollapsed ? 'collapsed' : ''} ${isOpen ? 'open' : ''}`} 
         aria-label={t.nav.brandPro}
+        role={isOpen ? 'dialog' : undefined}
+        aria-modal={isOpen ? true : undefined}
       >
         {/* Brand Header from Mockup with hide button */}
         <div className="sidebar-brand-container">
-          <h2 className="sidebar-brand-title">{t.nav.brandPro}</h2>
+          <div className="sidebar-brand-lockup">
+            <span className="sidebar-brand-mark" aria-hidden="true">p<span /></span>
+            <div><h2 className="sidebar-brand-title">{t.nav.brandPro}</h2><span className="sidebar-brand-subtitle">Il tuo gestionale, ogni giorno.</span></div>
+          </div>
+          <button type="button" className="sidebar-close-btn" onClick={onClose} aria-label="Chiudi menu">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="m6 6 12 12M6 18 18 6" /></svg>
+          </button>
           {onToggleCollapse && (
             <button
               type="button"
@@ -112,6 +123,7 @@ export default function Sidebar({
 
         {/* Navigation Items */}
         <nav className="sidebar-nav" aria-label="Navigazione principale">
+          <span className="sidebar-section-label">WORKSPACE</span>
           <ul className="sidebar-menu">
             {navItems.map((item) => {
               const Icon = item.icon

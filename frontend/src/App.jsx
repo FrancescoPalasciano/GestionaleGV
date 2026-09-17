@@ -35,6 +35,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [sidebarMobileOpen, setSidebarMobileOpen] = useState(false)
+  const [isMobileViewport, setIsMobileViewport] = useState(() => window.innerWidth <= 900)
 
   // Lingua fissa in italiano
   const t = dictionaries.it
@@ -63,17 +64,38 @@ export default function App() {
     }
   }, [])
 
-  // Lock body scroll when mobile sidebar drawer is open
+  // Verifica la sessione salvata e reagisce centralmente alla scadenza del JWT.
   useEffect(() => {
-    if (sidebarMobileOpen) {
-      document.body.classList.add('sidebar-open')
-    } else {
-      document.body.classList.remove('sidebar-open')
+    let active = true
+    const refreshCurrentUser = async () => {
+      if (!tokenStorage.get()) {
+        tokenStorage.clear()
+        if (active) setUser(null)
+        return
+      }
+      try {
+        const profile = await api.getCurrentUser()
+        if (active) {
+          setUser((current) => ({ ...current, ...profile }))
+        }
+      } catch {
+        if (active) {
+          tokenStorage.clear()
+          setUser(null)
+        }
+      }
     }
+    const handleExpiredSession = () => {
+      setUser(null)
+      setErrorMsg('La sessione è scaduta. Accedi nuovamente.')
+    }
+    window.addEventListener('auth:expired', handleExpiredSession)
+    refreshCurrentUser()
     return () => {
-      document.body.classList.remove('sidebar-open')
+      active = false
+      window.removeEventListener('auth:expired', handleExpiredSession)
     }
-  }, [sidebarMobileOpen])
+  }, [])
 
   // Close mobile sidebar on Escape or window resize > 900px
   useEffect(() => {
@@ -83,6 +105,7 @@ export default function App() {
       }
     }
     const handleResize = () => {
+      setIsMobileViewport(window.innerWidth <= 900)
       if (window.innerWidth > 900 && sidebarMobileOpen) {
         setSidebarMobileOpen(false)
       }
@@ -94,6 +117,12 @@ export default function App() {
       window.removeEventListener('resize', handleResize)
     }
   }, [sidebarMobileOpen])
+
+  useEffect(() => {
+    // Run after a drawer's scroll restoration so every new view starts at its heading.
+    const frame = requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'instant' }))
+    return () => cancelAnimationFrame(frame)
+  }, [activeTab])
 
   const handleInputChange = (e) => {
     const { name, value, type, checked } = e.target
@@ -133,7 +162,7 @@ export default function App() {
         const res = await api.login({
           email: formData.email,
           password: formData.password,
-        })
+        }, formData.rememberMe)
         setUser(res)
         setSuccessMsg(t.messages.loginSuccess)
       } else {
@@ -190,7 +219,7 @@ export default function App() {
     }
 
     return (
-      <div className="app-shell">
+      <div className={`app-shell ${sidebarCollapsed ? 'sidebar-is-collapsed' : ''}`}>
         <Sidebar
           activeTab={activeTab}
           onTabChange={setActiveTab}
@@ -204,7 +233,7 @@ export default function App() {
           onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
         />
 
-        <div className="app-main-layout">
+        <div className="app-main-layout" inert={sidebarMobileOpen ? true : undefined}>
           {/* Top Breadcrumb Bar matching mockup */}
           <header className="desktop-breadcrumb-bar">
             <div className="breadcrumb-left">
@@ -221,6 +250,8 @@ export default function App() {
                   }}
                   title="Menu di navigazione"
                   aria-label="Menu di navigazione"
+                  aria-controls="app-navigation"
+                  aria-expanded={isMobileViewport ? sidebarMobileOpen : !sidebarCollapsed}
                 >
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <line x1="4" y1="6" x2="20" y2="6" />
@@ -233,11 +264,12 @@ export default function App() {
               <div className="breadcrumb-text">
                 <span className="breadcrumb-category">{tabLabels[activeTab] || 'Dashboard'}</span>
                 <span className="breadcrumb-slash">/</span>
-                <span className="breadcrumb-view">{t.nav.desktopView}</span>
+                <span className="breadcrumb-view">Panoramica attività</span>
               </div>
             </div>
 
             <div className="breadcrumb-right">
+              <span className="header-store-name">{user.ragioneSociale}</span>
               <div 
                 className="header-status-badge"
                 title={backendOnline ? t.nav.connectedStatus : t.nav.offlineStatus}
@@ -291,9 +323,9 @@ export default function App() {
         </div>
 
         <div className="header-controls">
-          <div className="backend-indicator" title="Stato connessione backend">
+          <div className={`backend-indicator ${backendOnline ? '' : 'is-offline'}`} title="Stato del servizio">
             <span className="indicator-dot" style={{ backgroundColor: backendOnline ? '#0F6B4F' : '#d9383a' }}></span>
-            <span>{backendOnline ? 'API 8080 Online' : 'API 8080 Offline'}</span>
+            <span>{backendOnline ? 'Servizio disponibile' : 'Servizio non raggiungibile'}</span>
           </div>
         </div>
       </header>
@@ -530,7 +562,7 @@ export default function App() {
 
                 {/* Options row */}
                 {mode === 'login' && (
-                  <div className="form-options">
+                  <div className="form-options form-options-single">
                     <label className="checkbox-label">
                       <input
                         type="checkbox"
@@ -540,9 +572,6 @@ export default function App() {
                       />
                       <span>{t.auth.rememberMe}</span>
                     </label>
-                    <button type="button" className="link-btn">
-                      {t.auth.forgotPassword}
-                    </button>
                   </div>
                 )}
 

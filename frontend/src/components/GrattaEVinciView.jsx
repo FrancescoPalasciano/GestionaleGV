@@ -1,5 +1,11 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { api } from '../services/api.js'
+import useOverlayFocus from '../hooks/useOverlayFocus.js'
+
+const formatEuro = (value) => Number(value || 0).toLocaleString('it-IT', {
+  style: 'currency',
+  currency: 'EUR',
+})
 
 // Specifiche confezionamento stecche: numero fisso di biglietti per stecca
 // €0,50 → 600, €1,00 → 300, €2,00 → 150, €3,00 → 100, €5,00 → 60, €10,00 → 30, €20,00 → 15
@@ -147,6 +153,7 @@ export default function GrattaEVinciView({ t, user }) {
   const [isSavingPurchase, setIsSavingPurchase] = useState(false)
   const [purchaseSuccess, setPurchaseSuccess] = useState('')
   const [purchaseError, setPurchaseError] = useState('')
+  const [purchaseToDelete, setPurchaseToDelete] = useState(null)
 
   // Fasce di prezzo attive (caricate dal DB)
   const [priceTiers, setPriceTiers] = useState([])
@@ -183,6 +190,16 @@ export default function GrattaEVinciView({ t, user }) {
   const [modalTypeFilter, setModalTypeFilter] = useState('all') // 'all' | 'sales' | 'storni' | 'wins'
   const [currentPage, setCurrentPage] = useState(1)
   const pageSize = 8
+
+  const modalRef = useRef(null)
+  const hasOpenModal = showPriceModal || showWinModal || showResetConfirmModal || showAllTransactionsModal || Boolean(purchaseToDelete)
+  useOverlayFocus(modalRef, hasOpenModal, () => {
+    setShowPriceModal(false)
+    setShowWinModal(false)
+    setShowResetConfirmModal(false)
+    setShowAllTransactionsModal(false)
+    setPurchaseToDelete(null)
+  })
 
   // State per aggiunta fascia di prezzo
   const [newPriceInput, setNewPriceInput] = useState('')
@@ -278,6 +295,7 @@ export default function GrattaEVinciView({ t, user }) {
           amount: Number(t.amount),
           tier: t.tier,
           label: t.label,
+          relatedEntityId: t.relatedEntityId,
         }))
         setHistoryLog(formattedLog)
       }
@@ -416,19 +434,7 @@ export default function GrattaEVinciView({ t, user }) {
           const nowSend = new Date()
           const sendTime = `${String(nowSend.getHours()).padStart(2, '0')}:${String(nowSend.getMinutes()).padStart(2, '0')}`
 
-          return Promise.all([
-            api.gv.updateSale(pNum, d),
-            api.gv.logTransaction({
-              type: d > 0 ? 'gv_add' : 'gv_sub',
-              price: pNum,
-              quantity: absQty,
-              amount: pNum * absQty,
-              label: d > 0
-                ? (absQty === 1 ? `+1 biglietto da € ${pNum}` : `+${absQty} biglietti da € ${pNum}`)
-                : (absQty === 1 ? `–1 storno da € ${pNum}` : `–${absQty} storni da € ${pNum}`),
-              timeRecorded: sendTime,
-            }),
-          ])
+          return api.gv.updateSaleAndLog(pNum, d, sendTime)
         })
 
         await Promise.all(promises)
@@ -560,21 +566,12 @@ export default function GrattaEVinciView({ t, user }) {
     isMutating.current = true
     lastMutationTimeRef.current = Date.now()
     try {
-      await Promise.all([
-        api.gv.addWinning({
+      await api.gv.addWinningAndLog({
           amount: amountNum,
           tier: winTier,
           type: 'single',
           timeRecorded: timeFormatted,
-        }),
-        api.gv.logTransaction({
-          type: 'win',
-          amount: amountNum,
-          tier: winTier,
-          label: `Vincita · Biglietto ${winTier}`,
-          timeRecorded: timeFormatted,
-        }),
-      ])
+        })
       setSyncStatus('synced')
     } catch (err) {
       console.warn('Errore salvataggio vincita nel DB:', err)
@@ -634,23 +631,14 @@ export default function GrattaEVinciView({ t, user }) {
     isMutating.current = true
     lastMutationTimeRef.current = Date.now()
     try {
-      await Promise.all([
-        api.gv.addWinning({
+      await api.gv.addWinningAndLog({
           amount: amountNum,
           tier: dailyTotalNote.trim() || 'Chiusura terminale',
           type: 'closing',
           mode: dailyTotalMode,
           timeRecorded: timeFormatted,
           note: dailyTotalNote.trim() || 'Chiusura terminale',
-        }),
-        api.gv.logTransaction({
-          type: 'closing',
-          amount: amountNum,
-          tier: dailyTotalNote.trim() || 'Chiusura terminale',
-          label: 'Chiusura serale terminale',
-          timeRecorded: timeFormatted,
-        }),
-      ])
+        })
       setSyncStatus('synced')
     } catch (err) {
       console.warn('Errore salvataggio chiusura serale nel DB:', err)
@@ -686,12 +674,7 @@ export default function GrattaEVinciView({ t, user }) {
       isMutating.current = true
       lastMutationTimeRef.current = Date.now()
       try {
-        const deletePromises = []
-        for (const dbId of validDbIds) {
-          deletePromises.push(api.gv.deleteTransaction(dbId))
-          deletePromises.push(api.gv.deleteWinning(dbId))
-        }
-        await Promise.allSettled(deletePromises)
+        await Promise.all(validDbIds.map((dbId) => api.gv.deleteTransaction(dbId)))
       } catch (err) {
         console.warn('Errore rimozione dal DB:', err)
         // Rollback allo stato precedente
@@ -801,7 +784,7 @@ export default function GrattaEVinciView({ t, user }) {
 
   // Eliminazione fornitura caricata con aggiornamento conteggi
   const handleDeletePurchase = async (id) => {
-    if (!window.confirm('Confermi di voler eliminare questa fornitura registrata nel database?')) return
+    setPurchaseError('')
     try {
       await api.gv.deletePurchase(id)
       const updated = await api.gv.getPurchases()
@@ -825,9 +808,10 @@ export default function GrattaEVinciView({ t, user }) {
         setSteccheCounts(counts)
       }
       setPurchaseSuccess('Fornitura eliminata con successo dal database.')
+      setPurchaseToDelete(null)
       setTimeout(() => setPurchaseSuccess(''), 4000)
     } catch (err) {
-      alert('Errore eliminazione fornitura: ' + (err.message || 'Errore di rete'))
+      setPurchaseError('Errore eliminazione fornitura: ' + (err.message || 'Errore di rete'))
     }
   }
 
@@ -918,16 +902,16 @@ export default function GrattaEVinciView({ t, user }) {
                 gap: '7px',
                 fontSize: '13px',
                 fontWeight: '600',
-                color: '#0F6B4F',
-                backgroundColor: '#eef7f2',
-                border: '1px solid #cce5d7',
+                color: 'var(--color-primary)',
+                backgroundColor: 'var(--color-primary-subtle)',
+                border: '1px solid var(--color-primary-light)',
                 padding: '4px 10px',
                 borderRadius: '6px',
                 letterSpacing: '-0.1px'
               }}
               title="Data odierna di registrazione vendite"
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#0F6B4F" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
                 <line x1="16" y1="2" x2="16" y2="6" />
                 <line x1="8" y1="2" x2="8" y2="6" />
@@ -1037,7 +1021,7 @@ export default function GrattaEVinciView({ t, user }) {
                     justifyContent: 'center',
                   }}
                 >
-                  <div style={{ marginBottom: '12px', color: '#0F6B4F' }}>
+                  <div style={{ marginBottom: '12px', color: 'var(--color-primary)' }}>
                     <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                       <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
                       <line x1="7" y1="7" x2="7.01" y2="7" />
@@ -1131,7 +1115,7 @@ export default function GrattaEVinciView({ t, user }) {
                     justifyContent: 'center',
                   }}
                 >
-                  <div style={{ marginBottom: '12px', color: '#0F6B4F' }}>
+                  <div style={{ marginBottom: '12px', color: 'var(--color-primary)' }}>
                     <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                       <line x1="16.5" y1="9.4" x2="7.5" y2="4.21" />
                       <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
@@ -1265,7 +1249,7 @@ export default function GrattaEVinciView({ t, user }) {
 
               <div className="summary-actions-wrap">
                 <div className="gv-sync-badge-live" title="Ogni stecca aggiunta o stornata viene registrata immediatamente nel database">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#0F6B4F" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                     <polyline points="20 6 9 17 4 12" />
                   </svg>
                   <span>Salvataggio immediato nel database</span>
@@ -1460,7 +1444,7 @@ export default function GrattaEVinciView({ t, user }) {
               </div>
 
               {/* Totale fornitura registrata (settimana attiva) con formattazione italiana completa */}
-              <div className="gv-winnings-total" style={{ color: '#0F6B4F', marginBottom: '4px' }}>
+              <div className="gv-winnings-total" style={{ color: 'var(--color-primary)', marginBottom: '4px' }}>
                 € {totalSteccheAmount.toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </div>
               <div style={{ fontSize: '13px', color: '#66776e', marginBottom: '18px', fontWeight: 600 }}>
@@ -1552,7 +1536,7 @@ export default function GrattaEVinciView({ t, user }) {
                           <button
                             type="button"
                             className="gv-btn-trash-stecca"
-                            onClick={() => handleDeletePurchase(p.id)}
+                            onClick={() => setPurchaseToDelete(p)}
                             title="Elimina / Storna questa fornitura dal database"
                             aria-label={`Elimina fornitura ${p.description || ''}`}
                           >
@@ -1581,15 +1565,16 @@ export default function GrattaEVinciView({ t, user }) {
       {showAllTransactionsModal && (
         <div className="gv-modal-overlay" onClick={() => setShowAllTransactionsModal(false)}>
           <div
-            className="gv-modal-dialog gv-modal-dialog-large"
+            ref={modalRef} className="gv-modal-dialog gv-modal-dialog-large"
             onClick={(e) => e.stopPropagation()}
             role="dialog"
             aria-modal="true"
+            aria-labelledby="transactions-modal-title"
           >
             {/* Header modale */}
             <div className="gv-modal-header">
               <div>
-                <h3 className="gv-modal-title">Registro Completo Transazioni Odierne</h3>
+                <h3 className="gv-modal-title" id="transactions-modal-title">Registro Completo Transazioni Odierne</h3>
                 <p className="gv-modal-desc">
                   Elenco cronologico decrescente di tutte le battute Gratta e Vinci, storni e vincite odierne.
                 </p>
@@ -1817,10 +1802,10 @@ export default function GrattaEVinciView({ t, user }) {
       {/* Modal: Gestione Fasce di Prezzo */}
       {showPriceModal && (
         <div className="gv-modal-overlay" onClick={() => setShowPriceModal(false)}>
-          <div className="gv-modal-dialog" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+          <div ref={modalRef} className="gv-modal-dialog" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="price-modal-title">
             <div className="gv-modal-header">
               <div>
-                <h3 className="gv-modal-title">Gestione Fasce di Prezzo</h3>
+                <h3 className="gv-modal-title" id="price-modal-title">Gestione Fasce di Prezzo</h3>
                 <p className="gv-modal-desc">
                   Personalizza i tagliandi disponibili aggiungendo o rimuovendo fasce di prezzo.
                 </p>
@@ -1905,10 +1890,10 @@ export default function GrattaEVinciView({ t, user }) {
       {/* Modal: Inserimento Vincite (Singola vs Totale fine giornata) */}
       {showWinModal && (
         <div className="gv-modal-overlay" onClick={() => setShowWinModal(false)}>
-          <div className="gv-modal-dialog" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+          <div ref={modalRef} className="gv-modal-dialog" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="winnings-modal-title">
             <div className="gv-modal-header">
               <div>
-                <h3 className="gv-modal-title">
+                <h3 className="gv-modal-title" id="winnings-modal-title">
                   {winModalMode === 'single' ? 'Registra Singola Vincita' : 'Chiusura Vincite Fine Giornata'}
                 </h3>
                 <p className="gv-modal-desc">
@@ -2139,11 +2124,12 @@ export default function GrattaEVinciView({ t, user }) {
       {showResetConfirmModal && (
         <div className="gv-modal-overlay" onClick={() => setShowResetConfirmModal(false)}>
           <div
-            className="gv-modal-dialog"
+            ref={modalRef} className="gv-modal-dialog"
             style={{ maxWidth: '460px', padding: '26px 28px' }}
             onClick={(e) => e.stopPropagation()}
             role="dialog"
             aria-modal="true"
+            aria-labelledby="reset-modal-title"
           >
             <div className="gv-modal-header" style={{ borderBottom: 'none', paddingBottom: '0' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
@@ -2168,7 +2154,7 @@ export default function GrattaEVinciView({ t, user }) {
                   </svg>
                 </div>
                 <div>
-                  <h3 className="gv-modal-title" style={{ fontSize: '18px', margin: 0, color: '#171717' }}>
+                  <h3 className="gv-modal-title" id="reset-modal-title" style={{ fontSize: '18px', margin: 0, color: '#171717' }}>
                     Azzera Vendite di Oggi
                   </h3>
                   <p className="gv-modal-desc" style={{ marginTop: '2px', fontSize: '13px' }}>
@@ -2211,6 +2197,33 @@ export default function GrattaEVinciView({ t, user }) {
               >
                 Conferma Reset
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {purchaseToDelete && (
+        <div className="gv-modal-overlay" onClick={() => setPurchaseToDelete(null)}>
+          <div ref={modalRef} className="gv-modal-dialog" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="delete-purchase-title">
+            <div className="gv-modal-header">
+              <div>
+                <h3 className="gv-modal-title" id="delete-purchase-title">Elimina fornitura</h3>
+                <p className="gv-modal-desc">Questa operazione aggiornerà immediatamente il riepilogo settimanale.</p>
+              </div>
+              <button type="button" className="gv-modal-close" onClick={() => setPurchaseToDelete(null)} aria-label="Chiudi">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            </div>
+            <div className="gv-delete-purchase-summary">
+              <strong>{purchaseToDelete.description || 'Fornitura registrata'}</strong>
+              <span>{formatEuro(purchaseToDelete.amount)}</span>
+            </div>
+            <div className="gv-modal-footer">
+              <button type="button" className="gv-btn-secondary" onClick={() => setPurchaseToDelete(null)}>Annulla</button>
+              <button type="button" className="gv-btn-danger" onClick={() => handleDeletePurchase(purchaseToDelete.id)}>Elimina fornitura</button>
             </div>
           </div>
         </div>

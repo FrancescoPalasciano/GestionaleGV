@@ -27,7 +27,15 @@ public class TabacchinoService {
         return new TabacchinoResponseDTO(
                 entity.getId(),
                 entity.getEmail(),
-                entity.getActive()
+                entity.getActive(),
+                entity.getNome(),
+                entity.getCognome(),
+                entity.getRagioneSociale(),
+                entity.getCodiceFiscale(),
+                entity.getPartitaIva(),
+                entity.getCodiceRivendita(),
+                entity.getTelefono(),
+                entity.getIndirizzo()
         );
     }
 
