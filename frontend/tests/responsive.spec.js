@@ -13,7 +13,7 @@ const dashboard = {
 }
 
 function statistics(period) {
-  const count = period === 'month' ? 31 : period === 'year' ? 12 : 9
+  const count = period === 'week' ? 7 : period === 'month' ? 31 : period === 'year' ? 12 : 9
   return {
     totalRevenue: 1290, totalAggio: 103.2, totalWinnings: 240, winningsCount: 8,
     netCashFlow: 1050, totalTickets: 129, totalPurchases: 1500, totalStecche: 5,
@@ -115,6 +115,9 @@ for (const [width, height] of [[320, 740], [375, 812], [390, 844], [640, 900], [
     await navigate(page, 'Statistiche')
     await expect(page.locator('.chart-hit-target')).toHaveCount(9)
     await expectNoPageOverflow(page)
+    await page.getByRole('tab', { name: 'Settimana', exact: true }).click()
+    await expect(page.locator('.chart-hit-target')).toHaveCount(7)
+    await expectNoPageOverflow(page)
     await page.getByRole('tab', { name: 'Mese', exact: true }).click()
     await expect(page.locator('.chart-hit-target')).toHaveCount(31)
     await expectNoPageOverflow(page)
@@ -130,6 +133,42 @@ for (const [width, height] of [[320, 740], [375, 812], [390, 844], [640, 900], [
     await expect(page.locator('.settings-info-grid')).toBeVisible()
     await expectNoPageOverflow(page)
     expect(errors).toEqual([])
+  })
+}
+
+for (const width of [320, 1440]) {
+  test(`weekly statistics navigation at ${width}px`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 })
+    await mockApi(page)
+    await page.goto('/')
+    await navigate(page, 'Statistiche')
+    await page.getByLabel('Seleziona data personalizzata').fill('2027-01-01')
+    const week = page.getByRole('tab', { name: 'Settimana', exact: true })
+    const response = page.waitForResponse((res) => {
+      const url = new URL(res.url())
+      return url.pathname.endsWith('/gv/statistics') && url.searchParams.get('period') === 'week'
+        && url.searchParams.get('date') === '2027-01-01'
+    })
+    await week.click()
+    await response
+    await expect(week).toHaveAttribute('aria-selected', 'true')
+    await expect(page.locator('.chart-hit-target')).toHaveCount(7)
+    await expect(page.locator('.stats-date-text.desktop-label')).toHaveText('28 dicembre 2026 – 3 gennaio 2027')
+    await expect(page.locator('.stats-date-text.mobile-label')).toHaveText('28/12 – 03/01')
+    await expectNoPageOverflow(page)
+    await page.screenshot({ path: testInfo.outputPath('settimana.png'), fullPage: true })
+    await page.getByRole('button', { name: 'Periodo precedente', exact: true }).click()
+    await expect(page.getByLabel('Seleziona data personalizzata')).toHaveValue('2026-12-25')
+    await expect(page.locator('.stats-date-text.desktop-label')).toHaveText('21 dicembre 2026 – 27 dicembre 2026')
+    await page.getByRole('button', { name: 'Periodo successivo', exact: true }).click()
+    await expect(page.getByLabel('Seleziona data personalizzata')).toHaveValue('2027-01-01')
+    await page.getByRole('button', { name: 'Oggi', exact: true }).click()
+    const today = await page.evaluate(() => {
+      const d = new Date()
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    })
+    await expect(page.getByLabel('Seleziona data personalizzata')).toHaveValue(today)
+    await expect(week).toHaveAttribute('aria-selected', 'true')
   })
 }
 

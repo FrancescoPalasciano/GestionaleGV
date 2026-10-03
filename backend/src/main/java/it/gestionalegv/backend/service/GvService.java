@@ -433,7 +433,7 @@ public class GvService {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // 6. STATISTICHE AVANZATE (Day / Month / Year)
+    // 6. STATISTICHE AVANZATE (Day / Week / Month / Year)
     // ─────────────────────────────────────────────────────────────────────────
 
     @Transactional(readOnly = true)
@@ -442,7 +442,7 @@ public class GvService {
             refDate = LocalDate.now();
         }
         String p = (period != null) ? period.trim().toLowerCase() : "day";
-        if (!p.equals("day") && !p.equals("month") && !p.equals("year")) {
+        if (!p.equals("day") && !p.equals("week") && !p.equals("month") && !p.equals("year")) {
             p = "day";
         }
 
@@ -454,7 +454,14 @@ public class GvService {
 
         Locale itLocale = Locale.ITALIAN;
 
-        if ("month".equals(p)) {
+        if ("week".equals(p)) {
+            startDate = refDate.with(DayOfWeek.MONDAY);
+            endDate = startDate.plusDays(6);
+            startDateTime = startDate.atStartOfDay();
+            endDateTime = endDate.atTime(LocalTime.MAX);
+            DateTimeFormatter weekFormatter = DateTimeFormatter.ofPattern("d MMMM yyyy", itLocale);
+            periodLabel = startDate.format(weekFormatter) + " \u2013 " + endDate.format(weekFormatter);
+        } else if ("month".equals(p)) {
             startDate = refDate.withDayOfMonth(1);
             endDate = refDate.withDayOfMonth(refDate.lengthOfMonth());
             startDateTime = startDate.atStartOfDay();
@@ -688,13 +695,14 @@ public class GvService {
                 BigDecimal slotAggio = slotRev.multiply(new BigDecimal("0.08")).setScale(2, RoundingMode.HALF_UP);
                 chartPoints.add(new GvStatisticsDTO.ChartPoint(slotLabel, fullLabel, slotRev, slotAggio, slotWins, slotTickets));
             }
-        } else if ("month".equals(p)) {
-            // Tutti i giorni del mese (1..lengthOfMonth)
-            int len = refDate.lengthOfMonth();
-            for (int d = 1; d <= len; d++) {
-                LocalDate dayDate = refDate.withDayOfMonth(d);
-                String dayLabel = String.format("%02d", d);
-                String fullLabel = dayDate.format(DateTimeFormatter.ofPattern("EEEE d MMMM", itLocale));
+        } else if ("week".equals(p) || "month".equals(p)) {
+            // Un punto per ogni giorno della settimana o del mese.
+            for (LocalDate dayDate = startDate; !dayDate.isAfter(endDate); dayDate = dayDate.plusDays(1)) {
+                String dayLabel = "week".equals(p)
+                        ? dayDate.format(DateTimeFormatter.ofPattern("EEE", itLocale))
+                        : String.format("%02d", dayDate.getDayOfMonth());
+                String fullLabel = dayDate.format(DateTimeFormatter.ofPattern(
+                        "week".equals(p) ? "EEEE d MMMM yyyy" : "EEEE d MMMM", itLocale));
 
                 BigDecimal dayRev = BigDecimal.ZERO;
                 int dayTickets = 0;

@@ -14,7 +14,7 @@ function formatNumber(val) {
 }
 
 export default function StatisticheView({ t, user }) {
-  // Stato filtro temporale: 'day' | 'month' | 'year'
+  // Stato filtro temporale: 'day' | 'week' | 'month' | 'year'
   const [period, setPeriod] = useState('day')
 
   // Data di riferimento (default oggi in formato YYYY-MM-DD)
@@ -71,13 +71,15 @@ export default function StatisticheView({ t, user }) {
     return () => clearInterval(intervalId)
   }, [fetchStatistics, fetchStatisticsSilent])
 
-  // Navigazione temporale (Giorno / Mese / Anno precedente e successivo)
+  // Navigazione temporale (Giorno / Settimana / Mese / Anno precedente e successivo)
   const handleNavigate = (delta) => {
     const parts = refDate.split('-').map(Number)
     const current = new Date(parts[0], parts[1] - 1, parts[2], 12, 0, 0)
 
     if (period === 'day') {
       current.setDate(current.getDate() + delta)
+    } else if (period === 'week') {
+      current.setDate(current.getDate() + delta * 7)
     } else if (period === 'month') {
       current.setMonth(current.getMonth() + delta)
     } else if (period === 'year') {
@@ -110,6 +112,15 @@ export default function StatisticheView({ t, user }) {
       full = s.charAt(0).toUpperCase() + s.slice(1)
       const sh = d.toLocaleDateString('it-IT', { weekday: 'short', day: 'numeric', month: 'short' })
       short = sh.charAt(0).toUpperCase() + sh.slice(1)
+    } else if (period === 'week') {
+      const start = new Date(d)
+      start.setDate(start.getDate() - (start.getDay() + 6) % 7)
+      const end = new Date(start)
+      end.setDate(end.getDate() + 6)
+      const fullOptions = { day: 'numeric', month: 'long', year: 'numeric' }
+      const shortOptions = { day: '2-digit', month: '2-digit' }
+      full = `${start.toLocaleDateString('it-IT', fullOptions)} – ${end.toLocaleDateString('it-IT', fullOptions)}`
+      short = `${start.toLocaleDateString('it-IT', shortOptions)} – ${end.toLocaleDateString('it-IT', shortOptions)}`
     } else if (period === 'month') {
       const s = d.toLocaleDateString('it-IT', { month: 'long', year: 'numeric' })
       full = s.charAt(0).toUpperCase() + s.slice(1)
@@ -602,7 +613,7 @@ export default function StatisticheView({ t, user }) {
           </p>
         </div>
 
-        {/* Barra controlli filtro temporale: Giorno / Mese / Anno + Navigatore Data */}
+        {/* Barra controlli filtro temporale: Giorno / Settimana / Mese / Anno + Navigatore Data */}
         <div className="stats-controls-panel">
           {/* Selettore a pill del periodo */}
           <div className="stats-period-pills" role="tablist" aria-label="Seleziona intervallo temporale">
@@ -614,6 +625,15 @@ export default function StatisticheView({ t, user }) {
               onClick={() => setPeriod('day')}
             >
               Giorno
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={period === 'week'}
+              className={`stats-pill-btn ${period === 'week' ? 'active' : ''}`}
+              onClick={() => setPeriod('week')}
+            >
+              Settimana
             </button>
             <button
               type="button"
@@ -842,6 +862,8 @@ export default function StatisticheView({ t, user }) {
             <p className="stats-panel-subtitle">
               {period === 'day'
                 ? 'Distribuzione oraria delle vendite al banco e aggio maturato'
+                : period === 'week'
+                ? 'Andamento giornaliero delle vendite e aggio da lunedì a domenica'
                 : period === 'month'
                 ? `Progressione giornaliera dell'incasso e aggio per ${displayedPeriodLabel}`
                 : `Confronto mensile delle vendite e aggio per l'${displayedPeriodLabel}`}

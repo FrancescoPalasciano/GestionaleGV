@@ -6,7 +6,7 @@ import java.util.List;
 
 public class GvStatisticsDTO {
 
-    private String period; // "day" | "month" | "year"
+    private String period; // "day" | "week" | "month" | "year"
     private String periodLabel; // es. "Mercoledì 9 Settembre 2026", "Settembre 2026", "Anno 2026"
     private String referenceDate; // "2026-09-09"
 
