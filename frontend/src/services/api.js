@@ -57,8 +57,10 @@ export const tokenStorage = {
 
 async function request(endpoint, options = {}) {
   const token = tokenStorage.get();
+  // Con FormData il browser imposta da solo Content-Type multipart con il boundary
+  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
   const headers = {
-    'Content-Type': 'application/json',
+    ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
     ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
     ...options.headers,
   };
@@ -228,6 +230,20 @@ export const api = {
     deletePurchase: async (id) => {
       return await request(`/gv/purchases/${id}`, {
         method: 'DELETE',
+      });
+    },
+    previewInvoice: async (file) => {
+      const body = new FormData();
+      body.append('file', file);
+      return await request('/gv/purchases/invoice/preview', {
+        method: 'POST',
+        body,
+      });
+    },
+    importInvoice: async (data) => {
+      return await request('/gv/purchases/invoice/import', {
+        method: 'POST',
+        body: JSON.stringify(data),
       });
     },
     getStatistics: async (period = 'day', date = null) => {

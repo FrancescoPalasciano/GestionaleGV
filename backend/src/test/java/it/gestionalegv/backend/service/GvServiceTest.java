@@ -1,6 +1,12 @@
 package it.gestionalegv.backend.service;
 
+import it.gestionalegv.backend.dto.GvInvoiceImportRequest;
+import it.gestionalegv.backend.dto.GvInvoiceLineDTO;
+import it.gestionalegv.backend.dto.GvPurchaseDTO;
+import it.gestionalegv.backend.model.GvPriceTier;
+import it.gestionalegv.backend.model.GvPurchase;
 import it.gestionalegv.backend.model.GvTransactionLog;
+import org.mockito.ArgumentCaptor;
 import it.gestionalegv.backend.model.GvWinning;
 import it.gestionalegv.backend.dto.GvStatisticsDTO;
 import it.gestionalegv.backend.model.Tabacchino;
@@ -24,6 +30,7 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -36,16 +43,18 @@ class GvServiceTest {
     private GvTransactionLogRepository transactionRepository;
     private GvSaleRepository saleRepository;
     private GvPurchaseRepository purchaseRepository;
+    private GvPriceTierRepository priceTierRepository;
+    private TabacchinoRepository tabacchinoRepository;
     private GvService service;
 
     @BeforeEach
     void setUp() {
-        GvPriceTierRepository priceTierRepository = mock(GvPriceTierRepository.class);
+        priceTierRepository = mock(GvPriceTierRepository.class);
         saleRepository = mock(GvSaleRepository.class);
         winningRepository = mock(GvWinningRepository.class);
         transactionRepository = mock(GvTransactionLogRepository.class);
         purchaseRepository = mock(GvPurchaseRepository.class);
-        TabacchinoRepository tabacchinoRepository = mock(TabacchinoRepository.class);
+        tabacchinoRepository = mock(TabacchinoRepository.class);
         service = new GvService(priceTierRepository, saleRepository, winningRepository,
                 transactionRepository, purchaseRepository, tabacchinoRepository);
     }
@@ -135,6 +144,54 @@ class GvServiceTest {
         assertEquals(new BigDecimal("4"), stats.getChartPoints().get(6).getWinnings());
         verify(saleRepository).findByTabacchinoIdAndSaleDateBetweenAndDeletedFalse(1L, start, end);
         verify(purchaseRepository).findByTabacchinoIdAndPurchaseDateBetweenAndDeletedFalse(1L, start, end);
+    }
+
+    @Test
+    void importingInvoiceStoresRealPacksTicketsAndAmountsAndCreatesMissingTiers() {
+        Tabacchino owner = tabacchino(1L);
+        when(tabacchinoRepository.findById(1L)).thenReturn(Optional.of(owner));
+        when(purchaseRepository.findByTabacchinoIdAndDeletedFalseOrderByPurchaseDateDesc(1L)).thenReturn(List.of());
+        when(priceTierRepository.existsByTabacchinoIdAndPrice(1L, new BigDecimal("20.00"))).thenReturn(true);
+        when(purchaseRepository.save(any(GvPurchase.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        GvInvoiceImportRequest request = new GvInvoiceImportRequest();
+        request.setOrderNumber("20221513");
+        request.setPurchaseDate(LocalDate.of(2026, 10, 26));
+        request.setLines(List.of(
+                new GvInvoiceLineDTO(new BigDecimal("0.50"), "Fortuna in Tasca", 1, 200, new BigDecimal("100")),
+                new GvInvoiceLineDTO(new BigDecimal("20"), "100X NEW", 2, 30, new BigDecimal("600"))
+        ));
+
+        List<GvPurchaseDTO> created = service.importInvoice(1L, request);
+
+        assertEquals(2, created.size());
+        GvPurchaseDTO first = created.get(0);
+        assertEquals(1, first.getPacksCount());
+        assertEquals(200, first.getTickets());
+        assertEquals(new BigDecimal("100"), first.getAmount());
+        assertEquals(new BigDecimal("0.50"), first.getPrice());
+        assertEquals(LocalDate.of(2026, 10, 26), first.getPurchaseDate());
+        assertTrue(first.getDescription().startsWith("Fortuna in Tasca"));
+        assertTrue(first.getDescription().endsWith("Ordine Lottomatica n. 20221513"));
+        assertEquals(2, created.get(1).getPacksCount());
+
+        ArgumentCaptor<GvPriceTier> tier = ArgumentCaptor.forClass(GvPriceTier.class);
+        verify(priceTierRepository).save(tier.capture());
+        assertEquals(new BigDecimal("0.50"), tier.getValue().getPrice());
+    }
+
+    @Test
+    void importingSameInvoiceTwiceIsRejected() {
+        GvPurchase existing = new GvPurchase();
+        existing.setDescription("Buondi · 1 stecca da € 1,00 (150 pz) · Ordine Lottomatica n. 20221513");
+        when(purchaseRepository.findByTabacchinoIdAndDeletedFalseOrderByPurchaseDateDesc(1L)).thenReturn(List.of(existing));
+
+        GvInvoiceImportRequest request = new GvInvoiceImportRequest();
+        request.setOrderNumber("20221513");
+        request.setLines(List.of(new GvInvoiceLineDTO(new BigDecimal("1"), "Buondi", 1, 150, new BigDecimal("150"))));
+
+        assertThrows(IllegalStateException.class, () -> service.importInvoice(1L, request));
+        verify(purchaseRepository, never()).save(any());
     }
 
     private static Tabacchino tabacchino(Long id) {

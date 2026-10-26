@@ -28,6 +28,9 @@ public class GvPurchase {
 
     private Integer quantity;
 
+    // Biglietti effettivi (da fattura Lottomatica). Se null si usa il confezionamento standard per fascia.
+    private Integer tickets;
+
     @Column(name = "price", precision = 10, scale = 2)
     private BigDecimal price;
 
@@ -107,6 +110,14 @@ public class GvPurchase {
 
     public void setQuantity(Integer quantity) {
         this.quantity = quantity;
+    }
+
+    public Integer getTickets() {
+        return tickets;
+    }
+
+    public void setTickets(Integer tickets) {
+        this.tickets = tickets;
     }
 
     public String getSupplier() {

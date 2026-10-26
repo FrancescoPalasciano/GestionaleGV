@@ -1,6 +1,8 @@
 package it.gestionalegv.backend.exception;
 
 import it.gestionalegv.backend.dto.ErrorResponseDTO;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
@@ -11,6 +13,8 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -21,6 +25,8 @@ import java.util.Map;
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
     // ── 400 — Errori di validazione Bean Validation ─────────────────────
     @ExceptionHandler(MethodArgumentNotValidException.class)
@@ -37,6 +43,28 @@ public class GlobalExceptionHandler {
                 fieldErrors
         );
         return ResponseEntity.badRequest().body(response);
+    }
+
+    // ── 400 — Fattura Lottomatica non leggibile ─────────────────────────
+    @ExceptionHandler(InvoiceParseException.class)
+    public ResponseEntity<ErrorResponseDTO> handleInvoiceParse(InvoiceParseException ex) {
+        ErrorResponseDTO response = new ErrorResponseDTO(
+                400,
+                "Fattura non valida",
+                ex.getMessage()
+        );
+        return ResponseEntity.badRequest().body(response);
+    }
+
+    // ── 413 — File caricato troppo grande ───────────────────────────────
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<ErrorResponseDTO> handleMaxUploadSize(MaxUploadSizeExceededException ex) {
+        ErrorResponseDTO response = new ErrorResponseDTO(
+                413,
+                "File troppo grande",
+                "Il file caricato supera la dimensione massima consentita"
+        );
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).body(response);
     }
 
     // ── 401 — Credenziali non valide ────────────────────────────────────
@@ -103,9 +131,21 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(response);
     }
 
+    // ── 404 — Endpoint inesistente (es. backend non aggiornato) ─────────
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ErrorResponseDTO> handleNoResource(NoResourceFoundException ex) {
+        ErrorResponseDTO response = new ErrorResponseDTO(
+                404,
+                "Risorsa non trovata",
+                "Funzione non disponibile sul server: aggiorna il backend"
+        );
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
+    }
+
     // ── 500 — Errore generico (nessun stack trace esposto) ──────────────
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponseDTO> handleGeneric(Exception ex) {
+        log.error("Errore non gestito", ex);
         ErrorResponseDTO response = new ErrorResponseDTO(
                 500,
                 "Errore interno del server",

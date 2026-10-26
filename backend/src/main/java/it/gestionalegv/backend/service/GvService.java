@@ -23,6 +23,7 @@ import java.util.stream.Collectors;
 public class GvService {
 
     private static final Logger log = LoggerFactory.getLogger(GvService.class);
+    private static final String INVOICE_DESC_SEPARATOR = " · ";
     private static final List<BigDecimal> DEFAULT_PRICE_TIERS = Arrays.asList(
             BigDecimal.valueOf(1),
             BigDecimal.valueOf(2),
@@ -375,10 +376,7 @@ public class GvService {
             BigDecimal steccaPrice = new BigDecimal("300.00");
             BigDecimal totalAmount = steccaPrice.multiply(BigDecimal.valueOf(delta));
 
-            String formattedPrice = "\u20AC " + String.format(java.util.Locale.ITALIAN, "%.2f", price.doubleValue());
-            String desc = delta == 1
-                    ? String.format("1 stecca da %s (%d pz)", formattedPrice, totalTickets)
-                    : String.format("%d stecche da %s (%d pz)", delta, formattedPrice, totalTickets);
+            String desc = describeStecche(delta, price, totalTickets);
 
             GvPurchase purchase = new GvPurchase(
                     tabacchino,
@@ -407,12 +405,21 @@ public class GvService {
                     } else {
                         int newQty = currentQty - 1;
                         p.setQuantity(newQty);
-                        p.setAmount(new BigDecimal("300.00").multiply(BigDecimal.valueOf(newQty)));
-                        int tickets = getTicketsPerStecca(price.doubleValue()) * newQty;
-                        String formattedPrice = "\u20AC " + String.format(java.util.Locale.ITALIAN, "%.2f", price.doubleValue());
-                        p.setDescription(newQty == 1
-                                ? String.format("1 stecca da %s (%d pz)", formattedPrice, tickets)
-                                : String.format("%d stecche da %s (%d pz)", newQty, formattedPrice, tickets));
+                        int tickets;
+                        if (p.getTickets() != null) {
+                            // Riga da fattura: storno proporzionale (le confezioni non valgono sempre \u20AC 300)
+                            p.setAmount(p.getAmount().multiply(BigDecimal.valueOf(newQty))
+                                    .divide(BigDecimal.valueOf(currentQty), 2, RoundingMode.HALF_UP));
+                            tickets = p.getTickets() * newQty / currentQty;
+                            p.setTickets(tickets);
+                        } else {
+                            p.setAmount(new BigDecimal("300.00").multiply(BigDecimal.valueOf(newQty)));
+                            tickets = getTicketsPerStecca(price.doubleValue()) * newQty;
+                        }
+                        String[] parts = p.getDescription() != null ? p.getDescription().split(INVOICE_DESC_SEPARATOR) : new String[0];
+                        p.setDescription(parts.length == 3
+                                ? parts[0] + INVOICE_DESC_SEPARATOR + describeStecche(newQty, price, tickets) + INVOICE_DESC_SEPARATOR + parts[2]
+                                : describeStecche(newQty, price, tickets));
                         GvPurchase updated = purchaseRepository.save(p);
                         return toPurchaseDTO(updated);
                     }
@@ -420,6 +427,72 @@ public class GvService {
             }
         }
         return null;
+    }
+
+    private static String describeStecche(int qty, BigDecimal price, int tickets) {
+        String formattedPrice = "€ " + String.format(java.util.Locale.ITALIAN, "%.2f", price.doubleValue());
+        return qty == 1
+                ? String.format("1 stecca da %s (%d pz)", formattedPrice, tickets)
+                : String.format("%d stecche da %s (%d pz)", qty, formattedPrice, tickets);
+    }
+
+    private static String invoiceMarker(String orderNumber) {
+        return "Ordine Lottomatica n. " + orderNumber;
+    }
+
+    private boolean isInvoiceImported(Long tabacchinoId, String orderNumber) {
+        if (orderNumber == null || orderNumber.isBlank()) return false;
+        String marker = invoiceMarker(orderNumber);
+        return purchaseRepository.findByTabacchinoIdAndDeletedFalseOrderByPurchaseDateDesc(tabacchinoId).stream()
+                .anyMatch(p -> p.getDescription() != null && p.getDescription().endsWith(marker));
+    }
+
+    @Transactional(readOnly = true)
+    public GvInvoicePreviewDTO markInvoiceImportStatus(Long tabacchinoId, GvInvoicePreviewDTO preview) {
+        preview.setAlreadyImported(isInvoiceImported(tabacchinoId, preview.getOrderNumber()));
+        return preview;
+    }
+
+    /**
+     * Carica le stecche lette da un dettaglio ordine Lottomatica: una fornitura per ogni gioco,
+     * con pacchi, biglietti e importo reali. Le fasce di prezzo mancanti vengono create.
+     */
+    public List<GvPurchaseDTO> importInvoice(Long tabacchinoId, GvInvoiceImportRequest request) {
+        String orderNumber = request.getOrderNumber();
+        if (isInvoiceImported(tabacchinoId, orderNumber)) {
+            throw new IllegalStateException("L'ordine Lottomatica n. " + orderNumber + " è già stato caricato");
+        }
+
+        Tabacchino tabacchino = getTabacchino(tabacchinoId);
+        LocalDate pDate = request.getPurchaseDate() != null ? request.getPurchaseDate() : LocalDate.now();
+
+        request.getLines().stream()
+                .map(l -> l.getPrice().setScale(2, RoundingMode.HALF_UP))
+                .distinct()
+                .filter(price -> !priceTierRepository.existsByTabacchinoIdAndPrice(tabacchinoId, price))
+                .forEach(price -> priceTierRepository.save(new GvPriceTier(tabacchino, price)));
+
+        List<GvPurchaseDTO> created = new ArrayList<>();
+        for (GvInvoiceLineDTO line : request.getLines()) {
+            BigDecimal price = line.getPrice().setScale(2, RoundingMode.HALF_UP);
+            String desc = line.getGame().trim() + INVOICE_DESC_SEPARATOR + describeStecche(line.getPacks(), price, line.getTickets());
+            if (orderNumber != null && !orderNumber.isBlank()) {
+                desc += INVOICE_DESC_SEPARATOR + invoiceMarker(orderNumber);
+            }
+            GvPurchase purchase = new GvPurchase(
+                    tabacchino,
+                    line.getAmount(),
+                    line.getPacks(),
+                    "Lottomatica / Lotterie Nazionali",
+                    desc,
+                    pDate
+            );
+            purchase.setPrice(price);
+            purchase.setTickets(line.getTickets());
+            created.add(toPurchaseDTO(purchaseRepository.save(purchase)));
+        }
+        log.info("Importato ordine Lottomatica {} per tabacchino {}: {} righe", orderNumber, tabacchinoId, created.size());
+        return created;
     }
 
     public void deletePurchase(Long tabacchinoId, Long id) {
@@ -577,6 +650,7 @@ public class GvService {
         int totalStecche = 0;
         int totalSteccheTickets = 0;
         Map<BigDecimal, int[]> purchasesByTier = new TreeMap<>();
+        Map<BigDecimal, BigDecimal> purchaseCostByTier = new HashMap<>();
 
         for (GvPurchase purchase : purchases) {
             BigDecimal amt = purchase.getAmount() != null ? purchase.getAmount() : BigDecimal.ZERO;
@@ -592,11 +666,15 @@ public class GvService {
                 }
             }
             if (pPrice != null) {
-                int tPerSt = getTicketsPerStecca(pPrice.doubleValue());
-                totalSteccheTickets += qty * tPerSt;
+                pPrice = pPrice.setScale(2, RoundingMode.HALF_UP);
+                int tickets = purchase.getTickets() != null
+                        ? purchase.getTickets()
+                        : qty * getTicketsPerStecca(pPrice.doubleValue());
+                totalSteccheTickets += tickets;
                 purchasesByTier.computeIfAbsent(pPrice, k -> new int[2]);
                 purchasesByTier.get(pPrice)[0] += qty;
-                purchasesByTier.get(pPrice)[1] += qty * tPerSt;
+                purchasesByTier.get(pPrice)[1] += tickets;
+                purchaseCostByTier.merge(pPrice, amt, BigDecimal::add);
             }
         }
 
@@ -645,7 +723,7 @@ public class GvService {
             BigDecimal price = entry.getKey();
             int stCount = entry.getValue()[0];
             int tkCount = entry.getValue()[1];
-            BigDecimal cost = new BigDecimal("300.00").multiply(BigDecimal.valueOf(stCount));
+            BigDecimal cost = purchaseCostByTier.getOrDefault(price, BigDecimal.ZERO);
             purchaseTierList.add(new GvStatisticsDTO.PurchaseTierStat(price, stCount, tkCount, cost));
         }
         stats.setPurchaseTierStats(purchaseTierList);
@@ -813,6 +891,7 @@ public class GvService {
                 entity.getCreatedAt()
         );
         dto.setPrice(entity.getPrice());
+        dto.setTickets(entity.getTickets());
         return dto;
     }
 }

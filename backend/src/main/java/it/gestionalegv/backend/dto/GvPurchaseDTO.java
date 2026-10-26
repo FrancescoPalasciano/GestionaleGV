@@ -10,6 +10,7 @@ public class GvPurchaseDTO {
     private BigDecimal amount;
     private Integer packsCount;
     private BigDecimal price;
+    private Integer tickets;
     private String supplier;
     private String description;
     private LocalDate purchaseDate;
@@ -58,6 +59,14 @@ public class GvPurchaseDTO {
 
     public void setPrice(BigDecimal price) {
         this.price = price;
+    }
+
+    public Integer getTickets() {
+        return tickets;
+    }
+
+    public void setTickets(Integer tickets) {
+        this.tickets = tickets;
     }
 
     public String getSupplier() {

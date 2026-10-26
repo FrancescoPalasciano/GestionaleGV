@@ -49,6 +49,16 @@ export function getSteccheWeekBounds(refDate = new Date()) {
   return { start, end }
 }
 
+// Prezzo del biglietto di una fornitura (campo price o, per i record storici, "da € X" nella descrizione)
+function getPurchasePrice(purchase) {
+  if (purchase.price != null) return Number(purchase.price)
+  const match = purchase.description?.match(/da\s*€\s*([0-9]+(?:[.,][0-9]+)?)/i)
+  return match ? parseFloat(match[1].replace(',', '.')) : null
+}
+
+const toLocalIsoDate = (d = new Date()) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+
 export function isDateInCurrentSteccheWeek(dateStr) {
   if (!dateStr) return true
   const parts = String(dateStr).split('T')[0].split('-')
@@ -155,6 +165,14 @@ export default function GrattaEVinciView({ t, user }) {
   const [purchaseError, setPurchaseError] = useState('')
   const [purchaseToDelete, setPurchaseToDelete] = useState(null)
 
+  // Import fattura Lottomatica (PDF "Dettaglio Ordine"): anteprima → conferma
+  const invoiceInputRef = useRef(null)
+  const [invoicePreview, setInvoicePreview] = useState(null)
+  const [invoiceDate, setInvoiceDate] = useState(() => toLocalIsoDate())
+  const [isParsingInvoice, setIsParsingInvoice] = useState(false)
+  const [isImportingInvoice, setIsImportingInvoice] = useState(false)
+  const [isInvoiceDragOver, setIsInvoiceDragOver] = useState(false)
+
   // Fasce di prezzo attive (caricate dal DB)
   const [priceTiers, setPriceTiers] = useState([])
 
@@ -192,13 +210,14 @@ export default function GrattaEVinciView({ t, user }) {
   const pageSize = 8
 
   const modalRef = useRef(null)
-  const hasOpenModal = showPriceModal || showWinModal || showResetConfirmModal || showAllTransactionsModal || Boolean(purchaseToDelete)
+  const hasOpenModal = showPriceModal || showWinModal || showResetConfirmModal || showAllTransactionsModal || Boolean(purchaseToDelete) || Boolean(invoicePreview)
   useOverlayFocus(modalRef, hasOpenModal, () => {
     setShowPriceModal(false)
     setShowWinModal(false)
     setShowResetConfirmModal(false)
     setShowAllTransactionsModal(false)
     setPurchaseToDelete(null)
+    if (!isImportingInvoice) setInvoicePreview(null)
   })
 
   // State per aggiunta fascia di prezzo
@@ -764,23 +783,101 @@ export default function GrattaEVinciView({ t, user }) {
     }
   }
 
+  // Biglietti e importi registrati per fascia nella settimana corrente.
+  // Le righe da fattura Lottomatica hanno biglietti e importo reali (es. € 0,50 → 200 pz = € 100).
+  const savedSteccheByPrice = useMemo(() => {
+    const map = {}
+    purchasesList.forEach((p) => {
+      if (!isDateInCurrentSteccheWeek(p.purchaseDate)) return
+      const price = getPurchasePrice(p)
+      if (price == null) return
+      const qty = p.packsCount || p.quantity || 1
+      const entry = map[price] || (map[price] = { count: 0, tickets: 0, amount: 0 })
+      entry.count += qty
+      entry.tickets += p.tickets != null ? p.tickets : qty * getTicketsPerStecca(price)
+      entry.amount += Number(p.amount || 0)
+    })
+    return map
+  }, [purchasesList])
+
+  const getTierSteccheTotals = useCallback((price) => {
+    const saved = savedSteccheByPrice[price] || { count: 0, tickets: 0, amount: 0 }
+    // Differenza dovuta ai +1/+5 ottimistici non ancora ricaricati dal DB
+    const pending = (steccheCounts[price] || 0) - saved.count
+    return {
+      tickets: Math.max(0, saved.tickets + pending * getTicketsPerStecca(price)),
+      amount: Math.max(0, saved.amount + pending * PREZZO_STECCA),
+    }
+  }, [savedSteccheByPrice, steccheCounts])
+
   // Calcolo totale stecche, biglietti e costo per la settimana corrente (reset automatico ogni domenica)
   const { totalStecche, totalSteccheTickets, totalSteccheAmount } = useMemo(() => {
     let stSum = 0
     let tSum = 0
+    let aSum = 0
     priceTiers.forEach((p) => {
       const count = steccheCounts[p] || 0
       if (count > 0) {
+        const { tickets, amount } = getTierSteccheTotals(p)
         stSum += count
-        tSum += count * getTicketsPerStecca(p)
+        tSum += tickets
+        aSum += amount
       }
     })
     return {
       totalStecche: stSum,
       totalSteccheTickets: tSum,
-      totalSteccheAmount: stSum * PREZZO_STECCA,
+      totalSteccheAmount: aSum,
     }
-  }, [priceTiers, steccheCounts])
+  }, [priceTiers, steccheCounts, getTierSteccheTotals])
+
+  // ── Fattura Lottomatica: lettura PDF e anteprima ─────────────────────────
+  const handleInvoiceFileSelected = async (file) => {
+    if (!file) return
+    setPurchaseError('')
+    setPurchaseSuccess('')
+    if (file.type !== 'application/pdf' && !/\.pdf$/i.test(file.name)) {
+      setPurchaseError('Seleziona il PDF "Dettaglio Ordine" scaricato da Lottomatica.')
+      return
+    }
+    setIsParsingInvoice(true)
+    try {
+      const preview = await api.gv.previewInvoice(file)
+      setInvoiceDate(toLocalIsoDate())
+      setInvoicePreview(preview)
+    } catch (err) {
+      setPurchaseError(err.message || 'Impossibile leggere la fattura Lottomatica')
+    } finally {
+      setIsParsingInvoice(false)
+      if (invoiceInputRef.current) invoiceInputRef.current.value = ''
+    }
+  }
+
+  const handleConfirmInvoiceImport = async () => {
+    if (!invoicePreview || isImportingInvoice) return
+    setIsImportingInvoice(true)
+    setPurchaseError('')
+    isMutating.current = true
+    try {
+      await api.gv.importInvoice({
+        orderNumber: invoicePreview.orderNumber,
+        purchaseDate: invoiceDate,
+        lines: invoicePreview.lines,
+      })
+      const packs = invoicePreview.totalPacks
+      setPurchaseSuccess(`Caricate ${packs} ${packs === 1 ? 'stecca' : 'stecche'} (${invoicePreview.totalTickets} pz · ${formatEuro(invoicePreview.totalAmount)}) dalla fattura Lottomatica.`)
+      setTimeout(() => setPurchaseSuccess(''), 5000)
+      setInvoicePreview(null)
+    } catch (err) {
+      setPurchaseError(err.message || 'Errore durante il caricamento della fattura')
+    } finally {
+      isMutating.current = false
+      lastMutationTimeRef.current = 0
+      setIsImportingInvoice(false)
+      // Ricarica anche le fasce: l'import crea quelle mancanti (es. € 0,50)
+      loadDataFromDb(true)
+    }
+  }
 
   // Eliminazione fornitura caricata con aggiornamento conteggi
   const handleDeletePurchase = async (id) => {
@@ -961,7 +1058,7 @@ export default function GrattaEVinciView({ t, user }) {
               <p className="gv-section-subtitle">
                 {activeTableTab === 'sales'
                   ? 'Usa i controlli grandi per registrare rapidamente.'
-                  : 'Carico fornitura a stecche. Ogni stecca ha un costo fisso di € 300,00.'}
+                  : 'Carica la fattura Lottomatica oppure registra le stecche a mano (€ 300,00 a stecca).'}
               </p>
             </div>
 
@@ -1098,7 +1195,48 @@ export default function GrattaEVinciView({ t, user }) {
               )}
             </div>
           ) : (
-            /* VISTA ACQUISTATI: CARICO A STECCHE (€300 a stecca e conteggio automatico) */
+            /* VISTA ACQUISTATI: CARICO A STECCHE (fattura Lottomatica o €300 a stecca manuale) */
+            <>
+            <div
+              className={`gv-invoice-upload-bar ${isInvoiceDragOver ? 'is-dragover' : ''}`}
+              onDragOver={(e) => { e.preventDefault(); setIsInvoiceDragOver(true) }}
+              onDragLeave={() => setIsInvoiceDragOver(false)}
+              onDrop={(e) => {
+                e.preventDefault()
+                setIsInvoiceDragOver(false)
+                handleInvoiceFileSelected(e.dataTransfer.files?.[0])
+              }}
+            >
+              <div className="gv-invoice-upload-icon" aria-hidden="true">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                  <line x1="12" y1="18" x2="12" y2="12" />
+                  <polyline points="9 15 12 12 15 15" />
+                </svg>
+              </div>
+              <div className="gv-invoice-upload-text">
+                <strong>Fattura Lottomatica</strong>
+                <span>Carica il PDF "Dettaglio Ordine": le stecche vengono inserite in automatico.</span>
+              </div>
+              <input
+                ref={invoiceInputRef}
+                type="file"
+                accept="application/pdf,.pdf"
+                hidden
+                id="input-fattura-lottomatica"
+                onChange={(e) => handleInvoiceFileSelected(e.target.files?.[0])}
+              />
+              <button
+                type="button"
+                className="gv-btn-primary"
+                id="btn-carica-fattura"
+                disabled={isParsingInvoice}
+                onClick={() => invoiceInputRef.current?.click()}
+              >
+                {isParsingInvoice ? 'Lettura in corso…' : 'Carica PDF'}
+              </button>
+            </div>
             <div className="gv-cards-grid">
               {priceTiers.length === 0 ? (
                 <div
@@ -1140,8 +1278,7 @@ export default function GrattaEVinciView({ t, user }) {
                 priceTiers.map((price) => {
                   const stecche = steccheCounts[price] || 0
                   const ticketsPerStecca = getTicketsPerStecca(price)
-                  const totalTicketsTier = stecche * ticketsPerStecca
-                  const totalCostTier = stecche * PREZZO_STECCA
+                  const { tickets: totalTicketsTier, amount: totalCostTier } = getTierSteccheTotals(price)
 
                   return (
                     <div key={price} className={`gv-price-card gv-stecche-card ${stecche > 0 ? 'card-has-stecche' : ''}`}>
@@ -1212,6 +1349,7 @@ export default function GrattaEVinciView({ t, user }) {
                 })
               )}
             </div>
+            </>
           )}
 
           {/* Barra riassuntiva in fondo al blocco (Vendite vs Acquistati) */}
@@ -1242,7 +1380,7 @@ export default function GrattaEVinciView({ t, user }) {
                   <strong className="pill-val">{totalSteccheTickets} pz</strong>
                 </div>
                 <div className="summary-stat-pill">
-                  <span className="pill-label">Importo fornitura (€ 300/st):</span>
+                  <span className="pill-label">Importo fornitura:</span>
                   <strong className="pill-val accent">€ {totalSteccheAmount.toFixed(2).replace('.', ',')}</strong>
                 </div>
               </div>
@@ -2224,6 +2362,113 @@ export default function GrattaEVinciView({ t, user }) {
             <div className="gv-modal-footer">
               <button type="button" className="gv-btn-secondary" onClick={() => setPurchaseToDelete(null)}>Annulla</button>
               <button type="button" className="gv-btn-danger" onClick={() => handleDeletePurchase(purchaseToDelete.id)}>Elimina fornitura</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {invoicePreview && (
+        <div className="gv-modal-overlay" onClick={() => !isImportingInvoice && setInvoicePreview(null)}>
+          <div ref={modalRef} className="gv-modal-dialog gv-invoice-dialog" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="invoice-preview-title">
+            <div className="gv-modal-header">
+              <div>
+                <h3 className="gv-modal-title" id="invoice-preview-title">
+                  {invoicePreview.orderNumber ? `Ordine Lottomatica n. ${invoicePreview.orderNumber}` : 'Ordine Lottomatica'}
+                </h3>
+                <p className="gv-modal-desc">
+                  {invoicePreview.orderDate ? `Ordinato il ${formatPurchaseDate(invoicePreview.orderDate)} · ` : ''}
+                  Controlla le stecche lette dal PDF prima di caricarle.
+                </p>
+              </div>
+              <button type="button" className="gv-modal-close" onClick={() => setInvoicePreview(null)} disabled={isImportingInvoice} aria-label="Chiudi">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            </div>
+
+            {invoicePreview.alreadyImported && (
+              <div className="gv-invoice-alert is-error" role="alert">
+                Questo ordine è già stato caricato. Elimina le forniture esistenti dal registro se vuoi ricaricarlo.
+              </div>
+            )}
+            {invoicePreview.warnings?.length > 0 && (
+              <div className="gv-invoice-alert" role="status">
+                <strong>Verifica questi punti:</strong>
+                <ul>
+                  {invoicePreview.warnings.map((w) => <li key={w}>{w}</li>)}
+                </ul>
+              </div>
+            )}
+
+            <div className="gv-invoice-table-wrap">
+              <table className="gv-invoice-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Gioco</th>
+                    <th scope="col" className="num">Pacchi</th>
+                    <th scope="col" className="num">Biglietti</th>
+                    <th scope="col" className="num">Importo</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {invoicePreview.lines.map((line, idx) => {
+                    const showTier = idx === 0 || Number(invoicePreview.lines[idx - 1].price) !== Number(line.price)
+                    return (
+                      <React.Fragment key={`${line.price}-${line.game}-${idx}`}>
+                        {showTier && (
+                          <tr className="gv-invoice-tier-row">
+                            <th scope="rowgroup" colSpan={4}>€ {Number(line.price).toFixed(2).replace('.', ',')}</th>
+                          </tr>
+                        )}
+                        <tr>
+                          <td>{line.game}</td>
+                          <td className="num">{line.packs}</td>
+                          <td className="num">{line.tickets}</td>
+                          <td className="num">{formatEuro(line.amount)}</td>
+                        </tr>
+                      </React.Fragment>
+                    )
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr>
+                    <th scope="row">Totale</th>
+                    <td className="num">{invoicePreview.totalPacks}</td>
+                    <td className="num">{invoicePreview.totalTickets}</td>
+                    <td className="num">{formatEuro(invoicePreview.totalAmount)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+
+            <div className="gv-form-group gv-invoice-date-group">
+              <label className="gv-form-label" htmlFor="invoice-purchase-date">Data di carico</label>
+              <input
+                id="invoice-purchase-date"
+                type="date"
+                className="gv-modal-input"
+                value={invoiceDate}
+                max={toLocalIsoDate()}
+                onChange={(e) => setInvoiceDate(e.target.value)}
+              />
+              {invoiceDate && !isDateInCurrentSteccheWeek(invoiceDate) && (
+                <span className="gv-form-hint">Questa data è fuori dalla settimana in corso: le stecche non entreranno nel conteggio settimanale.</span>
+              )}
+            </div>
+
+            <div className="gv-modal-footer">
+              <button type="button" className="gv-btn-secondary" onClick={() => setInvoicePreview(null)} disabled={isImportingInvoice}>Annulla</button>
+              <button
+                type="button"
+                className="gv-btn-primary"
+                id="btn-conferma-fattura"
+                onClick={handleConfirmInvoiceImport}
+                disabled={isImportingInvoice || invoicePreview.alreadyImported || !invoiceDate}
+              >
+                {isImportingInvoice ? 'Caricamento…' : `Carica ${invoicePreview.totalPacks} stecche`}
+              </button>
             </div>
           </div>
         </div>

@@ -2,11 +2,18 @@ package it.gestionalegv.backend.controller;
 
 import it.gestionalegv.backend.dto.*;
 import it.gestionalegv.backend.security.SecurityUtils;
+import it.gestionalegv.backend.exception.InvoiceParseException;
 import it.gestionalegv.backend.service.GvService;
+import it.gestionalegv.backend.service.LottomaticaInvoiceParser;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 
 import org.springframework.format.annotation.DateTimeFormat;
 
@@ -25,10 +32,12 @@ public class GvController {
 
     private final GvService gvService;
     private final SecurityUtils securityUtils;
+    private final LottomaticaInvoiceParser invoiceParser;
 
-    public GvController(GvService gvService, SecurityUtils securityUtils) {
+    public GvController(GvService gvService, SecurityUtils securityUtils, LottomaticaInvoiceParser invoiceParser) {
         this.gvService = gvService;
         this.securityUtils = securityUtils;
+        this.invoiceParser = invoiceParser;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -162,6 +171,23 @@ public class GvController {
         Long tabacchinoId = securityUtils.getCurrentTabacchinoId();
         GvPurchaseDTO result = gvService.addSteccaPurchase(tabacchinoId, request.getPrice(), request.getDelta());
         return ResponseEntity.ok(result != null ? result : Map.of("status", "updated"));
+    }
+
+    @PostMapping(value = "/purchases/invoice/preview", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<GvInvoicePreviewDTO> previewInvoice(@RequestParam("file") MultipartFile file) throws IOException {
+        Long tabacchinoId = securityUtils.getCurrentTabacchinoId();
+        byte[] bytes = file.getBytes();
+        if (bytes.length < 5 || !new String(bytes, 0, 5, StandardCharsets.US_ASCII).equals("%PDF-")) {
+            throw new InvoiceParseException("Il file caricato non è un PDF");
+        }
+        GvInvoicePreviewDTO preview = invoiceParser.parse(bytes, file.getOriginalFilename());
+        return ResponseEntity.ok(gvService.markInvoiceImportStatus(tabacchinoId, preview));
+    }
+
+    @PostMapping("/purchases/invoice/import")
+    public ResponseEntity<List<GvPurchaseDTO>> importInvoice(@Valid @RequestBody GvInvoiceImportRequest request) {
+        Long tabacchinoId = securityUtils.getCurrentTabacchinoId();
+        return ResponseEntity.status(HttpStatus.CREATED).body(gvService.importInvoice(tabacchinoId, request));
     }
 
     @DeleteMapping("/purchases/{id}")
