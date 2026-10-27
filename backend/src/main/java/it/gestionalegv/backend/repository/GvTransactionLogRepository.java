@@ -14,11 +14,6 @@ public interface GvTransactionLogRepository extends JpaRepository<GvTransactionL
             Long tabacchinoId, LocalDateTime start, LocalDateTime end
     );
 
-    List<GvTransactionLog> findByTabacchinoIdAndRecordedAtBetweenOrderByRecordedAtDesc(
-            Long tabacchinoId, LocalDateTime start, LocalDateTime end
-    );
-
     List<GvTransactionLog> findTop10ByTabacchinoIdAndDeletedFalseOrderByRecordedAtDesc(Long tabacchinoId);
 
-    void deleteByTabacchinoIdAndId(Long tabacchinoId, Long id);
 }

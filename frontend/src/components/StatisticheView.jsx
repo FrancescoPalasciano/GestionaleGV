@@ -8,6 +8,28 @@ function formatEuro(val) {
   return '€ ' + num.toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
+function toLocalIso(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+// Vero se il periodo (giorno, settimana lun-dom, mese, anno) di refDate include oggi:
+// solo allora i dati possono cambiare e vale la pena aggiornarli in automatico
+function periodContainsToday(period, refDate) {
+  const today = toLocalIso(new Date())
+  if (period === 'year') return refDate.slice(0, 4) === today.slice(0, 4)
+  if (period === 'month') return refDate.slice(0, 7) === today.slice(0, 7)
+  if (period === 'week') {
+    const mondayOf = (iso) => {
+      const [y, m, d] = iso.split('-').map(Number)
+      const date = new Date(y, m - 1, d, 12)
+      date.setDate(date.getDate() - ((date.getDay() + 6) % 7))
+      return toLocalIso(date)
+    }
+    return mondayOf(refDate) === mondayOf(today)
+  }
+  return refDate === today
+}
+
 function formatNumber(val) {
   const num = Number(val || 0)
   return num.toLocaleString('it-IT')
@@ -60,16 +82,17 @@ export default function StatisticheView({ t, user }) {
     }
   }, [period, refDate])
 
-  // Caricamento iniziale e polling automatico ogni 30s per sincronizzazione multi-dispositivo
+  // Caricamento iniziale e polling ogni 30s, solo se il periodo è quello in corso (i periodi passati non cambiano)
   useEffect(() => {
     fetchStatistics()
+    if (!periodContainsToday(period, refDate)) return undefined
 
     const intervalId = setInterval(() => {
-      fetchStatisticsSilent()
+      if (!document.hidden) fetchStatisticsSilent()
     }, 30000)
 
     return () => clearInterval(intervalId)
-  }, [fetchStatistics, fetchStatisticsSilent])
+  }, [fetchStatistics, fetchStatisticsSilent, period, refDate])
 
   // Navigazione temporale (Giorno / Settimana / Mese / Anno precedente e successivo)
   const handleNavigate = (delta) => {

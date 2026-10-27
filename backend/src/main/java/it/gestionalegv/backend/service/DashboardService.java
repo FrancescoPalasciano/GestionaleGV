@@ -21,8 +21,11 @@ import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.TextStyle;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 @Service
 @Transactional(readOnly = true)
@@ -89,48 +92,32 @@ public class DashboardService {
                 break;
         }
 
-        // 1. Vendite nel periodo corrente (esclusi record soft-deleted)
-        List<GvTransactionLog> currentTransactions = transactionLogRepository
+        // Grafico: i 7 giorni della settimana corrente (Lun-Dom) o gli ultimi 7 giorni fino alla fine del periodo
+        LocalDate chartEnd = "week".equalsIgnoreCase(period) ? startDate.plusDays(6) : endDate;
+        LocalDate chartStart = "week".equalsIgnoreCase(period) ? startDate : chartEnd.minusDays(6);
+
+        // Una sola lettura dello storico copre periodo corrente, confronto e grafico (prima erano 9 query)
+        LocalDate logsFrom = Collections.min(List.of(startDate, compStartDate, chartStart));
+        LocalDate logsTo = Collections.max(List.of(endDate, compEndDate, chartEnd));
+        Map<LocalDate, List<GvTransactionLog>> logsByDay = transactionLogRepository
                 .findByTabacchinoIdAndRecordedAtBetweenAndDeletedFalseOrderByRecordedAtDesc(
-                        tabacchinoId, startDate.atStartOfDay(), endDate.atTime(LocalTime.MAX));
-        int soldGv = 0;
-        BigDecimal totalRevenue = BigDecimal.ZERO;
-        for (GvTransactionLog transaction : currentTransactions) {
-            if (transaction.getPrice() == null) continue;
-            int q = transaction.getQuantity() != null ? transaction.getQuantity() : 1;
-            if ("gv_add".equalsIgnoreCase(transaction.getType())) {
-                soldGv += q;
-                totalRevenue = totalRevenue.add(transaction.getPrice().multiply(BigDecimal.valueOf(q)));
-            } else if ("gv_sub".equalsIgnoreCase(transaction.getType())) {
-                soldGv -= q;
-                totalRevenue = totalRevenue.subtract(transaction.getPrice().multiply(BigDecimal.valueOf(q)));
-            }
-        }
-        soldGv = Math.max(0, soldGv);
-        totalRevenue = totalRevenue.max(BigDecimal.ZERO);
+                        tabacchinoId, logsFrom.atStartOfDay(), logsTo.atTime(LocalTime.MAX))
+                .stream()
+                .filter(t -> t.getRecordedAt() != null)
+                .collect(Collectors.groupingBy(t -> t.getRecordedAt().toLocalDate()));
+
+        // 1. Vendite nel periodo corrente (esclusi record soft-deleted)
+        SalesTotals current = sumSales(logsByDay, startDate, endDate);
+        int soldGv = current.tickets();
+        BigDecimal totalRevenue = current.revenue();
 
         // Guadagno parziale: Aggio dell'8% su Gratta e Vinci venduti (normativa italiana monopolio)
         BigDecimal partialProfit = totalRevenue.multiply(BigDecimal.valueOf(0.08)).setScale(2, RoundingMode.HALF_UP);
 
         // 2. Vendite periodo di confronto (per calcolo trend vs ieri/periodo prec.)
-        List<GvTransactionLog> compTransactions = transactionLogRepository
-                .findByTabacchinoIdAndRecordedAtBetweenAndDeletedFalseOrderByRecordedAtDesc(
-                        tabacchinoId, compStartDate.atStartOfDay(), compEndDate.atTime(LocalTime.MAX));
-        int compSoldGv = 0;
-        BigDecimal compTotalRevenue = BigDecimal.ZERO;
-        for (GvTransactionLog transaction : compTransactions) {
-            if (transaction.getPrice() == null) continue;
-            int q = transaction.getQuantity() != null ? transaction.getQuantity() : 1;
-            if ("gv_add".equalsIgnoreCase(transaction.getType())) {
-                compSoldGv += q;
-                compTotalRevenue = compTotalRevenue.add(transaction.getPrice().multiply(BigDecimal.valueOf(q)));
-            } else if ("gv_sub".equalsIgnoreCase(transaction.getType())) {
-                compSoldGv -= q;
-                compTotalRevenue = compTotalRevenue.subtract(transaction.getPrice().multiply(BigDecimal.valueOf(q)));
-            }
-        }
-        compSoldGv = Math.max(0, compSoldGv);
-        compTotalRevenue = compTotalRevenue.max(BigDecimal.ZERO);
+        SalesTotals comparison = sumSales(logsByDay, compStartDate, compEndDate);
+        int compSoldGv = comparison.tickets();
+        BigDecimal compTotalRevenue = comparison.revenue();
         BigDecimal compPartialProfit = compTotalRevenue.multiply(BigDecimal.valueOf(0.08)).setScale(2, RoundingMode.HALF_UP);
 
         // Calcolo Trend Biglietti Venduti
@@ -227,9 +214,7 @@ public class DashboardService {
             ));
         }
 
-        // 6. Punti del grafico per i 7 giorni della settimana corrente (da Lunedì a Domenica)
-        LocalDate chartEnd = "week".equalsIgnoreCase(period) ? startDate.plusDays(6) : endDate;
-        LocalDate chartStart = "week".equalsIgnoreCase(period) ? startDate : chartEnd.minusDays(6);
+        // 6. Punti del grafico per i 7 giorni
         List<DashboardChartPointDTO> chartPoints = new ArrayList<>();
         DateTimeFormatter dayMonthFmt = DateTimeFormatter.ofPattern("d MMM", Locale.ITALIAN);
         for (int i = 0; i < 7; i++) {
@@ -243,24 +228,9 @@ public class DashboardService {
             String formattedDate = day.format(dayMonthFmt);
             boolean isToday = day.equals(today);
 
-            List<GvTransactionLog> dayTransactions = transactionLogRepository
-                    .findByTabacchinoIdAndRecordedAtBetweenAndDeletedFalseOrderByRecordedAtDesc(
-                            tabacchinoId, day.atStartOfDay(), day.atTime(LocalTime.MAX));
-            BigDecimal dayRevenue = BigDecimal.ZERO;
-            int dayTickets = 0;
-            for (GvTransactionLog transaction : dayTransactions) {
-                if (transaction.getPrice() == null) continue;
-                int q = transaction.getQuantity() != null ? transaction.getQuantity() : 1;
-                if ("gv_add".equalsIgnoreCase(transaction.getType())) {
-                    dayTickets += q;
-                    dayRevenue = dayRevenue.add(transaction.getPrice().multiply(BigDecimal.valueOf(q)));
-                } else if ("gv_sub".equalsIgnoreCase(transaction.getType())) {
-                    dayTickets -= q;
-                    dayRevenue = dayRevenue.subtract(transaction.getPrice().multiply(BigDecimal.valueOf(q)));
-                }
-            }
-            dayTickets = Math.max(0, dayTickets);
-            dayRevenue = dayRevenue.max(BigDecimal.ZERO);
+            SalesTotals daySales = sumSales(logsByDay, day, day);
+            int dayTickets = daySales.tickets();
+            BigDecimal dayRevenue = daySales.revenue();
             BigDecimal dayProfit = dayRevenue.multiply(BigDecimal.valueOf(0.08)).setScale(2, RoundingMode.HALF_UP);
 
             chartPoints.add(new DashboardChartPointDTO(dayLabel, dayFullName, formattedDate, isToday, day, dayRevenue, dayTickets, dayProfit));
@@ -291,5 +261,29 @@ public class DashboardService {
         dto.setChartPoints(chartPoints);
 
         return dto;
+    }
+
+    private record SalesTotals(int tickets, BigDecimal revenue) {
+    }
+
+    /** Biglietti e incasso netti (vendite meno storni) tra due date incluse, mai negativi. */
+    private static SalesTotals sumSales(Map<LocalDate, List<GvTransactionLog>> logsByDay, LocalDate from, LocalDate to) {
+        int tickets = 0;
+        BigDecimal revenue = BigDecimal.ZERO;
+        for (LocalDate day = from; !day.isAfter(to); day = day.plusDays(1)) {
+            for (GvTransactionLog transaction : logsByDay.getOrDefault(day, List.of())) {
+                if (transaction.getPrice() == null) continue;
+                int q = transaction.getQuantity() != null ? transaction.getQuantity() : 1;
+                BigDecimal amount = transaction.getPrice().multiply(BigDecimal.valueOf(q));
+                if ("gv_add".equalsIgnoreCase(transaction.getType())) {
+                    tickets += q;
+                    revenue = revenue.add(amount);
+                } else if ("gv_sub".equalsIgnoreCase(transaction.getType())) {
+                    tickets -= q;
+                    revenue = revenue.subtract(amount);
+                }
+            }
+        }
+        return new SalesTotals(Math.max(0, tickets), revenue.max(BigDecimal.ZERO));
     }
 }

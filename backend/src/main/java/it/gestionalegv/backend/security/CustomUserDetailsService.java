@@ -3,7 +3,6 @@ package it.gestionalegv.backend.security;
 import it.gestionalegv.backend.model.Tabacchino;
 import it.gestionalegv.backend.repository.TabacchinoRepository;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
-import org.springframework.security.core.userdetails.User;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
@@ -28,13 +27,11 @@ public class CustomUserDetailsService implements UserDetailsService {
         Tabacchino tabacchino = repository.findByEmail(email)
                 .orElseThrow(() -> new UsernameNotFoundException("Utente non trovato con email: " + email));
 
-        return new User(
+        return new TabacchinoUserDetails(
+                tabacchino.getId(),
                 tabacchino.getEmail(),
                 tabacchino.getPassword(),
-                tabacchino.getActive(),       // enabled
-                true,                          // accountNonExpired
-                true,                          // credentialsNonExpired
-                true,                          // accountNonLocked
+                Boolean.TRUE.equals(tabacchino.getActive()),
                 List.of(new SimpleGrantedAuthority("ROLE_USER"))
         );
     }

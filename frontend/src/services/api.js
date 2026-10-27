@@ -172,12 +172,6 @@ export const api = {
     getSalesToday: async () => {
       return await request('/gv/sales/today');
     },
-    updateSale: async (price, delta) => {
-      return await request('/gv/sales', {
-        method: 'POST',
-        body: JSON.stringify({ price, delta }),
-      });
-    },
     updateSaleAndLog: async (price, delta, timeRecorded) => {
       return await request('/gv/sales/transaction', {
         method: 'POST',
@@ -192,31 +186,14 @@ export const api = {
     getWinningsToday: async () => {
       return await request('/gv/winnings/today');
     },
-    addWinning: async (data) => {
-      return await request('/gv/winnings', {
-        method: 'POST',
-        body: JSON.stringify(data),
-      });
-    },
     addWinningAndLog: async (data) => {
       return await request('/gv/winnings/transaction', {
         method: 'POST',
         body: JSON.stringify(data),
       });
     },
-    deleteWinning: async (id) => {
-      return await request(`/gv/winnings/${id}`, {
-        method: 'DELETE',
-      });
-    },
     getTransactionsToday: async () => {
       return await request('/gv/transactions/today');
-    },
-    logTransaction: async (data) => {
-      return await request('/gv/transactions', {
-        method: 'POST',
-        body: JSON.stringify(data),
-      });
     },
     deleteTransaction: async (id) => {
       return await request(`/gv/transactions/${id}`, {
@@ -226,12 +203,6 @@ export const api = {
     getPurchases: async (period) => {
       const query = period ? `?period=${encodeURIComponent(period)}` : '';
       return await request(`/gv/purchases${query}`);
-    },
-    addPurchase: async (data) => {
-      return await request('/gv/purchases', {
-        method: 'POST',
-        body: JSON.stringify(data),
-      });
     },
     updateStecca: async (price, delta) => {
       return await request('/gv/purchases/stecca', {
