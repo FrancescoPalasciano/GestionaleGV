@@ -56,6 +56,11 @@ function getPurchasePrice(purchase) {
   return match ? parseFloat(match[1].replace(',', '.')) : null
 }
 
+// Stecche di una fornitura: 0 per i Gratta e Vinci singoli (biglietti sfusi)
+function getPurchasePacks(purchase) {
+  return purchase.packsCount ?? purchase.quantity ?? 1
+}
+
 const toLocalIsoDate = (d = new Date()) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
@@ -173,6 +178,10 @@ export default function GrattaEVinciView({ t, user }) {
   const [isImportingInvoice, setIsImportingInvoice] = useState(false)
   const [isInvoiceDragOver, setIsInvoiceDragOver] = useState(false)
 
+  // Carico Gratta e Vinci singoli (biglietti sfusi, non a stecca): { price, tickets, date }
+  const [singlesForm, setSinglesForm] = useState(null)
+  const [isSavingSingles, setIsSavingSingles] = useState(false)
+
   // Fasce di prezzo attive (caricate dal DB)
   const [priceTiers, setPriceTiers] = useState([])
 
@@ -210,7 +219,7 @@ export default function GrattaEVinciView({ t, user }) {
   const pageSize = 8
 
   const modalRef = useRef(null)
-  const hasOpenModal = showPriceModal || showWinModal || showResetConfirmModal || showAllTransactionsModal || Boolean(purchaseToDelete) || Boolean(invoicePreview)
+  const hasOpenModal = showPriceModal || showWinModal || showResetConfirmModal || showAllTransactionsModal || Boolean(purchaseToDelete) || Boolean(invoicePreview) || Boolean(singlesForm)
   useOverlayFocus(modalRef, hasOpenModal, () => {
     setShowPriceModal(false)
     setShowWinModal(false)
@@ -218,6 +227,7 @@ export default function GrattaEVinciView({ t, user }) {
     setShowAllTransactionsModal(false)
     setPurchaseToDelete(null)
     if (!isImportingInvoice) setInvoicePreview(null)
+    if (!isSavingSingles) setSinglesForm(null)
   })
 
   // State per aggiunta fascia di prezzo
@@ -327,12 +337,12 @@ export default function GrattaEVinciView({ t, user }) {
           if (isDateInCurrentSteccheWeek(p.purchaseDate)) {
             if (p.price != null) {
               const pKey = Number(p.price)
-              counts[pKey] = (counts[pKey] || 0) + (p.packsCount || p.quantity || 1)
+              counts[pKey] = (counts[pKey] || 0) + getPurchasePacks(p)
             } else if (p.description) {
               const match = p.description.match(/da\s*€\s*([0-9]+(?:[.,][0-9]+)?)/i)
               if (match) {
                 const pKey = parseFloat(match[1].replace(',', '.'))
-                counts[pKey] = (counts[pKey] || 0) + (p.packsCount || p.quantity || 1)
+                counts[pKey] = (counts[pKey] || 0) + getPurchasePacks(p)
               }
             }
           }
@@ -748,12 +758,12 @@ export default function GrattaEVinciView({ t, user }) {
           if (isDateInCurrentSteccheWeek(p.purchaseDate)) {
             if (p.price != null) {
               const pKey = Number(p.price)
-              counts[pKey] = (counts[pKey] || 0) + (p.packsCount || p.quantity || 1)
+              counts[pKey] = (counts[pKey] || 0) + getPurchasePacks(p)
             } else if (p.description) {
               const match = p.description.match(/da\s*€\s*([0-9]+(?:[.,][0-9]+)?)/i)
               if (match) {
                 const pKey = parseFloat(match[1].replace(',', '.'))
-                counts[pKey] = (counts[pKey] || 0) + (p.packsCount || p.quantity || 1)
+                counts[pKey] = (counts[pKey] || 0) + getPurchasePacks(p)
               }
             }
           }
@@ -791,7 +801,7 @@ export default function GrattaEVinciView({ t, user }) {
       if (!isDateInCurrentSteccheWeek(p.purchaseDate)) return
       const price = getPurchasePrice(p)
       if (price == null) return
-      const qty = p.packsCount || p.quantity || 1
+      const qty = getPurchasePacks(p)
       const entry = map[price] || (map[price] = { count: 0, tickets: 0, amount: 0 })
       entry.count += qty
       entry.tickets += p.tickets != null ? p.tickets : qty * getTicketsPerStecca(price)
@@ -816,13 +826,10 @@ export default function GrattaEVinciView({ t, user }) {
     let tSum = 0
     let aSum = 0
     priceTiers.forEach((p) => {
-      const count = steccheCounts[p] || 0
-      if (count > 0) {
-        const { tickets, amount } = getTierSteccheTotals(p)
-        stSum += count
-        tSum += tickets
-        aSum += amount
-      }
+      const { tickets, amount } = getTierSteccheTotals(p)
+      stSum += steccheCounts[p] || 0
+      tSum += tickets
+      aSum += amount
     })
     return {
       totalStecche: stSum,
@@ -879,6 +886,38 @@ export default function GrattaEVinciView({ t, user }) {
     }
   }
 
+  // ── Gratta e Vinci singoli: biglietti sfusi al valore facciale ────────────
+  const singlesTickets = singlesForm ? Number(singlesForm.tickets) : NaN
+  const isSinglesValid = Number.isInteger(singlesTickets) && singlesTickets >= 1 && singlesTickets <= 10000 && Boolean(singlesForm?.date)
+
+  const openSinglesForm = (price) => {
+    setPurchaseError('')
+    setPurchaseSuccess('')
+    setSinglesForm({ price, tickets: '', date: toLocalIsoDate() })
+  }
+
+  const handleConfirmSingles = async (e) => {
+    e.preventDefault()
+    if (!isSinglesValid || isSavingSingles) return
+    const { price, date } = singlesForm
+    setIsSavingSingles(true)
+    setPurchaseError('')
+    isMutating.current = true
+    try {
+      await api.gv.addSingles({ price, tickets: singlesTickets, purchaseDate: date })
+      setPurchaseSuccess(`Caricati ${singlesTickets} ${singlesTickets === 1 ? 'biglietto singolo' : 'biglietti singoli'} da € ${Number(price).toFixed(2).replace('.', ',')} (${formatEuro(price * singlesTickets)}).`)
+      setTimeout(() => setPurchaseSuccess(''), 4500)
+      setSinglesForm(null)
+    } catch (err) {
+      setPurchaseError(err.message || 'Errore durante il caricamento dei biglietti singoli')
+    } finally {
+      isMutating.current = false
+      lastMutationTimeRef.current = 0
+      setIsSavingSingles(false)
+      loadDataFromDb(true)
+    }
+  }
+
   // Eliminazione fornitura caricata con aggiornamento conteggi
   const handleDeletePurchase = async (id) => {
     setPurchaseError('')
@@ -892,12 +931,12 @@ export default function GrattaEVinciView({ t, user }) {
           if (isDateInCurrentSteccheWeek(p.purchaseDate)) {
             if (p.price != null) {
               const pKey = Number(p.price)
-              counts[pKey] = (counts[pKey] || 0) + (p.packsCount || p.quantity || 1)
+              counts[pKey] = (counts[pKey] || 0) + getPurchasePacks(p)
             } else if (p.description) {
               const match = p.description.match(/da\s*€\s*([0-9]+(?:[.,][0-9]+)?)/i)
               if (match) {
                 const pKey = parseFloat(match[1].replace(',', '.'))
-                counts[pKey] = (counts[pKey] || 0) + (p.packsCount || p.quantity || 1)
+                counts[pKey] = (counts[pKey] || 0) + getPurchasePacks(p)
               }
             }
           }
@@ -1058,7 +1097,7 @@ export default function GrattaEVinciView({ t, user }) {
               <p className="gv-section-subtitle">
                 {activeTableTab === 'sales'
                   ? 'Usa i controlli grandi per registrare rapidamente.'
-                  : 'Carica la fattura Lottomatica oppure registra le stecche a mano (€ 300,00 a stecca).'}
+                  : 'Carica la fattura Lottomatica, registra le stecche a mano (€ 300,00 a stecca) o aggiungi biglietti singoli.'}
               </p>
             </div>
 
@@ -1281,7 +1320,7 @@ export default function GrattaEVinciView({ t, user }) {
                   const { tickets: totalTicketsTier, amount: totalCostTier } = getTierSteccheTotals(price)
 
                   return (
-                    <div key={price} className={`gv-price-card gv-stecche-card ${stecche > 0 ? 'card-has-stecche' : ''}`}>
+                    <div key={price} className={`gv-price-card gv-stecche-card ${totalTicketsTier > 0 ? 'card-has-stecche' : ''}`}>
                       <div className="gv-price-card-header">
                         <div className="gv-price-display">
                           € {Number(price).toFixed(2).replace('.', ',')}
@@ -1332,9 +1371,19 @@ export default function GrattaEVinciView({ t, user }) {
                         </button>
                       </div>
 
+                      <button
+                        type="button"
+                        className="gv-btn-singles"
+                        onClick={() => openSinglesForm(price)}
+                        title="Carica Gratta e Vinci singoli (non a stecca)"
+                        aria-label={`Aggiungi biglietti singoli da € ${price}`}
+                      >
+                        + Biglietti singoli
+                      </button>
+
                       {/* Riga Calcolo automatico dinamico per questa card */}
                       <div className="gv-stecca-subtotal-line">
-                        {stecche > 0 ? (
+                        {totalTicketsTier > 0 ? (
                           <span className="stecca-subtotal-active">
                             {totalTicketsTier} pz · € {totalCostTier.toFixed(2).replace('.', ',')}
                           </span>
@@ -1630,13 +1679,13 @@ export default function GrattaEVinciView({ t, user }) {
                 {displayedPurchases.length === 0 ? (
                   <div className="gv-history-empty" style={{ padding: '24px 12px' }}>
                     {purchasesFilter === 'current_week'
-                      ? 'Nessuna fornitura registrata per la settimana in corso. Ogni domenica il ciclo si azzera automaticamente. Usa i pulsanti +1 e +5 sulle fasce a sinistra per caricare le nuove stecche.'
+                      ? 'Nessuna fornitura registrata per la settimana in corso. Ogni domenica il ciclo si azzera automaticamente. Usa i pulsanti +1 e +5 sulle fasce a sinistra per caricare le nuove stecche, oppure "+ Biglietti singoli" per i biglietti sfusi.'
                       : 'Nessuna fornitura registrata nel database.'}
                   </div>
                 ) : (
                   <div className="gv-purchases-scroll-list">
                     {displayedPurchases.map((p) => {
-                      const qty = p.packsCount || p.quantity || 1
+                      const qty = getPurchasePacks(p)
                       const amountNum = Number(p.amount || qty * PREZZO_STECCA)
                       const amountFormatted = amountNum.toLocaleString('it-IT', {
                         minimumFractionDigits: 2,
@@ -1653,7 +1702,9 @@ export default function GrattaEVinciView({ t, user }) {
                                 € {amountFormatted}
                               </span>
                               <span className="gv-purchase-stecche-tag">
-                                {qty} {qty === 1 ? 'stecca' : 'stecche'}
+                                {qty === 0
+                                  ? `${p.tickets ?? 0} pz singoli`
+                                  : `${qty} ${qty === 1 ? 'stecca' : 'stecche'}`}
                               </span>
                               {isCurrent && (
                                 <span className="gv-purchase-active-pill" title="Inclusa nel conteggio settimanale">
@@ -2364,6 +2415,69 @@ export default function GrattaEVinciView({ t, user }) {
               <button type="button" className="gv-btn-danger" onClick={() => handleDeletePurchase(purchaseToDelete.id)}>Elimina fornitura</button>
             </div>
           </div>
+        </div>
+      )}
+
+      {singlesForm && (
+        <div className="gv-modal-overlay" onClick={() => !isSavingSingles && setSinglesForm(null)}>
+          <form ref={modalRef} className="gv-modal-dialog" onClick={(e) => e.stopPropagation()} onSubmit={handleConfirmSingles} role="dialog" aria-modal="true" aria-labelledby="singles-title">
+            <div className="gv-modal-header">
+              <div>
+                <h3 className="gv-modal-title" id="singles-title">Biglietti singoli da € {Number(singlesForm.price).toFixed(2).replace('.', ',')}</h3>
+                <p className="gv-modal-desc">Gratta e Vinci sfusi, non a stecca: l'importo è calcolato al prezzo del biglietto.</p>
+              </div>
+              <button type="button" className="gv-modal-close" onClick={() => setSinglesForm(null)} disabled={isSavingSingles} aria-label="Chiudi">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="gv-form-group">
+              <label className="gv-form-label" htmlFor="singles-tickets">Numero di biglietti</label>
+              <input
+                id="singles-tickets"
+                type="number"
+                inputMode="numeric"
+                min="1"
+                max="10000"
+                step="1"
+                className="gv-modal-input"
+                placeholder="Es. 10"
+                autoFocus
+                value={singlesForm.tickets}
+                onChange={(e) => setSinglesForm((f) => ({ ...f, tickets: e.target.value }))}
+              />
+            </div>
+
+            <div className="gv-form-group">
+              <label className="gv-form-label" htmlFor="singles-date">Data di carico</label>
+              <input
+                id="singles-date"
+                type="date"
+                className="gv-modal-input"
+                value={singlesForm.date}
+                max={toLocalIsoDate()}
+                onChange={(e) => setSinglesForm((f) => ({ ...f, date: e.target.value }))}
+              />
+              {singlesForm.date && !isDateInCurrentSteccheWeek(singlesForm.date) && (
+                <span className="gv-form-hint">Questa data è fuori dalla settimana in corso: i biglietti non entreranno nel conteggio settimanale.</span>
+              )}
+            </div>
+
+            <div className="gv-delete-purchase-summary">
+              <strong>{isSinglesValid ? `${singlesTickets} × € ${Number(singlesForm.price).toFixed(2).replace('.', ',')}` : 'Importo fornitura'}</strong>
+              <span>{formatEuro(isSinglesValid ? singlesForm.price * singlesTickets : 0)}</span>
+            </div>
+
+            <div className="gv-modal-footer">
+              <button type="button" className="gv-btn-secondary" onClick={() => setSinglesForm(null)} disabled={isSavingSingles}>Annulla</button>
+              <button type="submit" className="gv-btn-primary" id="btn-conferma-singoli" disabled={!isSinglesValid || isSavingSingles}>
+                {isSavingSingles ? 'Caricamento…' : 'Carica biglietti'}
+              </button>
+            </div>
+          </form>
         </div>
       )}
 
