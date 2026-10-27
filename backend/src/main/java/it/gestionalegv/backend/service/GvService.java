@@ -395,7 +395,9 @@ public class GvService {
             for (GvPurchase p : list) {
                 boolean matchPrice = (p.getPrice() != null && p.getPrice().compareTo(price) == 0);
                 boolean matchDesc = (p.getDescription() != null && p.getDescription().contains(String.format(java.util.Locale.ITALIAN, "%.2f", price.doubleValue())));
-                if (matchPrice || matchDesc) {
+                // Le forniture di biglietti singoli (0 stecche) non si stornano a stecca
+                boolean isSingles = p.getQuantity() != null && p.getQuantity() == 0;
+                if ((matchPrice || matchDesc) && !isSingles) {
                     int currentQty = p.getQuantity() != null ? p.getQuantity() : 1;
                     if (currentQty <= 1) {
                         p.setDeleted(true);
@@ -429,8 +431,38 @@ public class GvService {
         return null;
     }
 
+    /**
+     * Carica Gratta e Vinci singoli (non a stecca): una fornitura con 0 stecche e i biglietti indicati,
+     * al valore facciale. La fascia di prezzo viene creata se manca.
+     */
+    public GvPurchaseDTO addSinglesPurchase(Long tabacchinoId, GvSinglesPurchaseRequest request) {
+        Tabacchino tabacchino = getTabacchino(tabacchinoId);
+        BigDecimal price = request.getPrice().setScale(2, RoundingMode.HALF_UP);
+        int tickets = request.getTickets();
+        if (!priceTierRepository.existsByTabacchinoIdAndPrice(tabacchinoId, price)) {
+            priceTierRepository.save(new GvPriceTier(tabacchino, price));
+        }
+
+        GvPurchase purchase = new GvPurchase(
+                tabacchino,
+                price.multiply(BigDecimal.valueOf(tickets)),
+                0,
+                "Lotterie Nazionali",
+                describeStecche(0, price, tickets),
+                request.getPurchaseDate()
+        );
+        purchase.setPrice(price);
+        purchase.setTickets(tickets);
+        return toPurchaseDTO(purchaseRepository.save(purchase));
+    }
+
     private static String describeStecche(int qty, BigDecimal price, int tickets) {
         String formattedPrice = "€ " + String.format(java.util.Locale.ITALIAN, "%.2f", price.doubleValue());
+        if (qty == 0) {
+            return tickets == 1
+                    ? String.format("1 biglietto singolo da %s", formattedPrice)
+                    : String.format("%d biglietti singoli da %s", tickets, formattedPrice);
+        }
         return qty == 1
                 ? String.format("1 stecca da %s (%d pz)", formattedPrice, tickets)
                 : String.format("%d stecche da %s (%d pz)", qty, formattedPrice, tickets);

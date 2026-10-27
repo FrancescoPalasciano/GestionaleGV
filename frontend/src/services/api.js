@@ -227,6 +227,12 @@ export const api = {
         body: JSON.stringify({ price, delta }),
       });
     },
+    addSingles: async (data) => {
+      return await request('/gv/purchases/singles', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      });
+    },
     deletePurchase: async (id) => {
       return await request(`/gv/purchases/${id}`, {
         method: 'DELETE',

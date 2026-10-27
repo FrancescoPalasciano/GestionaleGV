@@ -173,6 +173,12 @@ public class GvController {
         return ResponseEntity.ok(result != null ? result : Map.of("status", "updated"));
     }
 
+    @PostMapping("/purchases/singles")
+    public ResponseEntity<GvPurchaseDTO> addSinglesPurchase(@Valid @RequestBody GvSinglesPurchaseRequest request) {
+        Long tabacchinoId = securityUtils.getCurrentTabacchinoId();
+        return ResponseEntity.status(HttpStatus.CREATED).body(gvService.addSinglesPurchase(tabacchinoId, request));
+    }
+
     @PostMapping(value = "/purchases/invoice/preview", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<GvInvoicePreviewDTO> previewInvoice(@RequestParam("file") MultipartFile file) throws IOException {
         Long tabacchinoId = securityUtils.getCurrentTabacchinoId();

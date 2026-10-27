@@ -45,6 +45,16 @@ async function mockApi(page, state) {
       }))
       await route.fulfill({ status: 201, json: state.purchases })
       return
+    } else if (path === '/gv/purchases/singles') {
+      state.singlesBody = request.postDataJSON()
+      const { price, tickets, purchaseDate } = state.singlesBody
+      const purchase = {
+        id: 99, price, tickets, packsCount: 0, amount: price * tickets, purchaseDate, supplier: 'Lotterie Nazionali',
+        description: `${tickets} biglietti singoli da € ${price.toFixed(2).replace('.', ',')}`,
+      }
+      state.purchases = [...state.purchases, purchase]
+      await route.fulfill({ status: 201, json: purchase })
+      return
     } else throw new Error(`Unexpected API request: ${request.method()} ${path}`)
     await route.fulfill({ json: data })
   })
@@ -103,3 +113,35 @@ test('already imported invoice cannot be loaded twice', async ({ page }) => {
   await expect(dialog.getByRole('alert')).toContainText('già stato caricato')
   await expect(dialog.getByRole('button', { name: 'Carica 6 stecche' })).toBeDisabled()
 })
+
+for (const [width, height] of [[375, 812], [1280, 800]]) {
+  test(`single tickets are loaded without stecche at ${width}px`, async ({ page }, testInfo) => {
+    const state = { tiers: [1, 5, 20], purchases: [] }
+    await page.setViewportSize({ width, height })
+    await mockApi(page, state)
+    await openPurchases(page)
+
+    const card = page.locator('.gv-stecche-card', { hasText: '€ 5,00' })
+    await card.getByRole('button', { name: 'Aggiungi biglietti singoli da € 5' }).click()
+
+    const dialog = page.getByRole('dialog', { name: 'Biglietti singoli da € 5,00' })
+    await expect(dialog).toBeVisible()
+    await expect(dialog.getByRole('button', { name: 'Carica biglietti' })).toBeDisabled()
+    await dialog.getByLabel('Numero di biglietti').fill('12')
+    await expect(dialog).toContainText('60,00 €')
+    await page.screenshot({ path: testInfo.outputPath(`singles-form-${width}.png`), fullPage: false })
+
+    await dialog.getByRole('button', { name: 'Carica biglietti' }).click()
+    await expect(dialog).toBeHidden()
+
+    expect(state.singlesBody).toEqual({ price: 5, tickets: 12, purchaseDate: todayIso })
+    // I singoli contano biglietti e importo ma non aggiungono stecche
+    await expect(card).toContainText('12 pz · € 60,00')
+    await expect(card.locator('.stecche-badge-num')).toHaveText('0')
+    await expect(page.locator('.gv-stecche-footer-summary')).toContainText('0 st')
+    await expect(page.locator('.gv-stecche-footer-summary')).toContainText('12 pz')
+    await expect(page.locator('.gv-stecche-footer-summary')).toContainText('€ 60,00')
+    await expect(page.locator('.gv-purchase-stecche-tag')).toHaveText('12 pz singoli')
+    await page.screenshot({ path: testInfo.outputPath(`singles-loaded-${width}.png`), fullPage: true })
+  })
+}

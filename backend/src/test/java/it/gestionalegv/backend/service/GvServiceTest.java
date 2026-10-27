@@ -3,6 +3,7 @@ package it.gestionalegv.backend.service;
 import it.gestionalegv.backend.dto.GvInvoiceImportRequest;
 import it.gestionalegv.backend.dto.GvInvoiceLineDTO;
 import it.gestionalegv.backend.dto.GvPurchaseDTO;
+import it.gestionalegv.backend.dto.GvSinglesPurchaseRequest;
 import it.gestionalegv.backend.model.GvPriceTier;
 import it.gestionalegv.backend.model.GvPurchase;
 import it.gestionalegv.backend.model.GvTransactionLog;
@@ -192,6 +193,46 @@ class GvServiceTest {
 
         assertThrows(IllegalStateException.class, () -> service.importInvoice(1L, request));
         verify(purchaseRepository, never()).save(any());
+    }
+
+    @Test
+    void addingSingleTicketsStoresFaceValueWithoutStecche() {
+        Tabacchino owner = tabacchino(1L);
+        when(tabacchinoRepository.findById(1L)).thenReturn(Optional.of(owner));
+        when(priceTierRepository.existsByTabacchinoIdAndPrice(1L, new BigDecimal("5.00"))).thenReturn(true);
+        when(purchaseRepository.save(any(GvPurchase.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        GvSinglesPurchaseRequest request = new GvSinglesPurchaseRequest();
+        request.setPrice(new BigDecimal("5"));
+        request.setTickets(12);
+        request.setPurchaseDate(LocalDate.of(2026, 10, 27));
+
+        GvPurchaseDTO created = service.addSinglesPurchase(1L, request);
+
+        assertEquals(0, created.getPacksCount());
+        assertEquals(12, created.getTickets());
+        assertEquals(new BigDecimal("60.00"), created.getAmount());
+        assertEquals(new BigDecimal("5.00"), created.getPrice());
+        assertEquals(LocalDate.of(2026, 10, 27), created.getPurchaseDate());
+        assertEquals("12 biglietti singoli da € 5,00", created.getDescription());
+        verify(priceTierRepository, never()).save(any());
+    }
+
+    @Test
+    void removingASteccaNeverTouchesSingleTickets() {
+        Tabacchino owner = tabacchino(1L);
+        when(tabacchinoRepository.findById(1L)).thenReturn(Optional.of(owner));
+        GvPurchase singles = new GvPurchase(owner, new BigDecimal("60.00"), 0, null, "12 biglietti singoli da € 5,00", LocalDate.now());
+        singles.setPrice(new BigDecimal("5.00"));
+        singles.setTickets(12);
+        GvPurchase stecca = new GvPurchase(owner, new BigDecimal("300.00"), 1, null, "1 stecca da € 5,00 (60 pz)", LocalDate.now());
+        stecca.setPrice(new BigDecimal("5.00"));
+        when(purchaseRepository.findByTabacchinoIdAndDeletedFalseOrderByPurchaseDateDesc(1L)).thenReturn(List.of(singles, stecca));
+
+        service.addSteccaPurchase(1L, new BigDecimal("5.00"), -1);
+
+        assertEquals(false, singles.getDeleted());
+        assertTrue(stecca.getDeleted());
     }
 
     private static Tabacchino tabacchino(Long id) {
