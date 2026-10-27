@@ -6,6 +6,7 @@ import GrattaEVinciView from './components/GrattaEVinciView.jsx'
 import DashboardView from './components/DashboardView.jsx'
 import StatisticheView from './components/StatisticheView.jsx'
 import ImpostazioniView from './components/ImpostazioniView.jsx'
+import useConnectionStatus from './hooks/useConnectionStatus.js'
 
 export default function App() {
   const [user, setUser] = useState(() => tokenStorage.getUser())
@@ -31,7 +32,7 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false)
   const [errorMsg, setErrorMsg] = useState('')
   const [successMsg, setSuccessMsg] = useState('')
-  const [backendOnline, setBackendOnline] = useState(false)
+  const { isOnline: backendOnline, isOffline, reconnectCount, retry: retryConnection } = useConnectionStatus()
   const [activeTab, setActiveTab] = useState('dashboard')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [sidebarMobileOpen, setSidebarMobileOpen] = useState(false)
@@ -44,25 +45,6 @@ export default function App() {
   useEffect(() => {
     document.title = t.seo.siteTitle
   }, [t])
-
-  // Check backend health on mount
-  useEffect(() => {
-    let isMounted = true
-    const checkStatus = async () => {
-      try {
-        await api.checkHealth()
-        if (isMounted) setBackendOnline(true)
-      } catch {
-        if (isMounted) setBackendOnline(false)
-      }
-    }
-    checkStatus()
-    const interval = setInterval(checkStatus, 15000)
-    return () => {
-      isMounted = false
-      clearInterval(interval)
-    }
-  }, [])
 
   // Verifica la sessione salvata e reagisce centralmente alla scadenza del JWT.
   useEffect(() => {
@@ -78,8 +60,9 @@ export default function App() {
         if (active) {
           setUser((current) => ({ ...current, ...profile }))
         }
-      } catch {
-        if (active) {
+      } catch (err) {
+        // Offline la sessione resta valida: il blocco di connessione copre l'app finché non torna
+        if (active && !err.isNetworkError) {
           tokenStorage.clear()
           setUser(null)
         }
@@ -219,7 +202,8 @@ export default function App() {
     }
 
     return (
-      <div className={`app-shell ${sidebarCollapsed ? 'sidebar-is-collapsed' : ''}`}>
+      <>
+      <div className={`app-shell ${sidebarCollapsed ? 'sidebar-is-collapsed' : ''}`} inert={isOffline ? true : undefined} aria-hidden={isOffline ? true : undefined}>
         <Sidebar
           activeTab={activeTab}
           onTabChange={setActiveTab}
@@ -286,7 +270,8 @@ export default function App() {
           </header>
 
           {/* Active Tab View */}
-          <main className="dashboard-content-area" role="main">
+          {/* Il key rimonta la vista al ritorno della connessione: i dati vengono ricaricati dal database */}
+          <main key={reconnectCount} className="dashboard-content-area" role="main">
             {activeTab === 'grattaEVinci' && (
               <GrattaEVinciView t={t} user={user} />
             )}
@@ -306,6 +291,37 @@ export default function App() {
           </main>
         </div>
       </div>
+
+      {isOffline && (
+        <div className="offline-lock" role="alertdialog" aria-modal="true" aria-labelledby="offline-lock-title" aria-describedby="offline-lock-desc">
+          <div className="offline-lock-card">
+            <div className="offline-lock-icon" aria-hidden="true">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="2" y1="2" x2="22" y2="22" />
+                <path d="M8.5 16.5a5 5 0 0 1 7 0" />
+                <path d="M2 8.82a15 15 0 0 1 4.17-2.65" />
+                <path d="M10.66 5c4.01-.36 8.14.9 11.34 3.76" />
+                <path d="M16.85 11.25a10 10 0 0 1 2.22 1.68" />
+                <path d="M5 13a10 10 0 0 1 5.24-2.76" />
+                <line x1="12" y1="20" x2="12.01" y2="20" />
+              </svg>
+            </div>
+            <h2 id="offline-lock-title">Connessione persa</h2>
+            <p id="offline-lock-desc">
+              Il gestionale è bloccato finché la connessione non torna, così nessuna operazione va persa.
+              Appena il servizio risponde, i dati vengono ricaricati in automatico.
+            </p>
+            <div className="offline-lock-status" aria-live="polite">
+              <span className="offline-lock-spinner" aria-hidden="true" />
+              Riconnessione in corso…
+            </div>
+            <button type="button" className="offline-lock-retry" onClick={() => retryConnection()} autoFocus>
+              Riprova ora
+            </button>
+          </div>
+        </div>
+      )}
+      </>
     )
   }
 
