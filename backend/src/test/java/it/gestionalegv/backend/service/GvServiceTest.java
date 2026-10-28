@@ -3,6 +3,9 @@ package it.gestionalegv.backend.service;
 import it.gestionalegv.backend.dto.GvInvoiceImportRequest;
 import it.gestionalegv.backend.dto.GvInvoiceLineDTO;
 import it.gestionalegv.backend.dto.GvPurchaseDTO;
+import it.gestionalegv.backend.dto.GvSaleDTO;
+import it.gestionalegv.backend.dto.GvSaleTransactionRequest;
+import it.gestionalegv.backend.model.GvSale;
 import it.gestionalegv.backend.dto.GvSinglesPurchaseRequest;
 import it.gestionalegv.backend.model.GvPriceTier;
 import it.gestionalegv.backend.model.GvPurchase;
@@ -35,6 +38,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -183,9 +187,8 @@ class GvServiceTest {
 
     @Test
     void importingSameInvoiceTwiceIsRejected() {
-        GvPurchase existing = new GvPurchase();
-        existing.setDescription("Buondi · 1 stecca da € 1,00 (150 pz) · Ordine Lottomatica n. 20221513");
-        when(purchaseRepository.findByTabacchinoIdAndDeletedFalseOrderByPurchaseDateDesc(1L)).thenReturn(List.of(existing));
+        when(purchaseRepository.existsByTabacchinoIdAndDeletedFalseAndDescriptionEndingWith(1L, "Ordine Lottomatica n. 20221513"))
+                .thenReturn(true);
 
         GvInvoiceImportRequest request = new GvInvoiceImportRequest();
         request.setOrderNumber("20221513");
@@ -233,6 +236,63 @@ class GvServiceTest {
 
         assertEquals(false, singles.getDeleted());
         assertTrue(stecca.getDeleted());
+    }
+
+    @Test
+    void removingASteccaOnlyMatchesItsOwnPriceTier() {
+        Tabacchino owner = tabacchino(1L);
+        when(tabacchinoRepository.findById(1L)).thenReturn(Optional.of(owner));
+        // "€ 25,00" contiene "5,00": prima lo storno di una stecca da € 5 colpiva questa fornitura
+        GvPurchase twentyFive = new GvPurchase(owner, new BigDecimal("300.00"), 1, null, "1 stecca da € 25,00 (12 pz)", LocalDate.now());
+        twentyFive.setPrice(new BigDecimal("25.00"));
+        GvPurchase five = new GvPurchase(owner, new BigDecimal("300.00"), 1, null, "1 stecca da € 5,00 (60 pz)", LocalDate.now());
+        five.setPrice(new BigDecimal("5.00"));
+        GvPurchase legacyFive = new GvPurchase(owner, new BigDecimal("300.00"), 1, null, "1 stecca da € 5,00 (60 pz)", LocalDate.now());
+        when(purchaseRepository.findByTabacchinoIdAndDeletedFalseOrderByPurchaseDateDesc(1L)).thenReturn(List.of(twentyFive, five, legacyFive));
+
+        service.addSteccaPurchase(1L, new BigDecimal("5.00"), -1);
+
+        assertEquals(false, twentyFive.getDeleted());
+        assertTrue(five.getDeleted());
+        assertEquals(false, legacyFive.getDeleted());
+    }
+
+    @Test
+    void removingASteccaFallsBackToTheDescriptionForLegacyRows() {
+        Tabacchino owner = tabacchino(1L);
+        when(tabacchinoRepository.findById(1L)).thenReturn(Optional.of(owner));
+        GvPurchase legacyFifteen = new GvPurchase(owner, new BigDecimal("300.00"), 1, null, "1 stecca da € 15,00 (20 pz)", LocalDate.now());
+        GvPurchase legacyFive = new GvPurchase(owner, new BigDecimal("300.00"), 1, null, "1 stecca da € 5,00 (60 pz)", LocalDate.now());
+        when(purchaseRepository.findByTabacchinoIdAndDeletedFalseOrderByPurchaseDateDesc(1L)).thenReturn(List.of(legacyFifteen, legacyFive));
+
+        service.addSteccaPurchase(1L, new BigDecimal("5.00"), -1);
+
+        assertEquals(false, legacyFifteen.getDeleted());
+        assertTrue(legacyFive.getDeleted());
+    }
+
+    @Test
+    void saleStornoBelowZeroLogsOnlyTheAppliedDeltaAndLocksTheRowOnce() {
+        Tabacchino owner = tabacchino(1L);
+        when(tabacchinoRepository.findById(1L)).thenReturn(Optional.of(owner));
+        GvSale sale = new GvSale(owner, new BigDecimal("5.00"), 3, LocalDate.now());
+        when(saleRepository.findByTabacchinoIdAndPriceAndSaleDate(1L, new BigDecimal("5.00"), LocalDate.now()))
+                .thenReturn(Optional.of(sale));
+        when(saleRepository.save(any(GvSale.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(transactionRepository.save(any(GvTransactionLog.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        GvSaleTransactionRequest request = new GvSaleTransactionRequest();
+        request.setPrice(new BigDecimal("5"));
+        request.setDelta(-5);
+        GvSaleDTO updated = service.updateSaleAndLog(1L, request);
+
+        assertEquals(0, updated.getQuantity());
+        ArgumentCaptor<GvTransactionLog> logged = ArgumentCaptor.forClass(GvTransactionLog.class);
+        verify(transactionRepository).save(logged.capture());
+        assertEquals("gv_sub", logged.getValue().getType());
+        assertEquals(3, logged.getValue().getQuantity());
+        assertEquals(new BigDecimal("15.00"), logged.getValue().getAmount());
+        verify(saleRepository, times(1)).findByTabacchinoIdAndPriceAndSaleDate(1L, new BigDecimal("5.00"), LocalDate.now());
     }
 
     private static Tabacchino tabacchino(Long id) {

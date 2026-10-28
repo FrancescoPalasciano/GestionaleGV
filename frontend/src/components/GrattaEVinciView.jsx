@@ -61,20 +61,32 @@ function getPurchasePacks(purchase) {
   return purchase.packsCount ?? purchase.quantity ?? 1
 }
 
+// Stecche per fascia di prezzo nella settimana corrente (reset domenica)
+function countSteccheByPrice(purchases) {
+  const { start, end } = getSteccheWeekBounds()
+  return purchases.reduce((counts, p) => {
+    if (!isDateInWeek(p.purchaseDate, start, end)) return counts
+    const price = getPurchasePrice(p)
+    if (price != null) counts[price] = (counts[price] || 0) + getPurchasePacks(p)
+    return counts
+  }, {})
+}
+
 const toLocalIsoDate = (d = new Date()) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
-export function isDateInCurrentSteccheWeek(dateStr) {
+function isDateInWeek(dateStr, start, end) {
   if (!dateStr) return true
   const parts = String(dateStr).split('T')[0].split('-')
-  let d
-  if (parts.length === 3) {
-    d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]), 12, 0, 0)
-  } else {
-    d = new Date(dateStr)
-  }
-  const { start, end } = getSteccheWeekBounds()
+  const d = parts.length === 3
+    ? new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]), 12, 0, 0)
+    : new Date(dateStr)
   return d >= start && d <= end
+}
+
+export function isDateInCurrentSteccheWeek(dateStr) {
+  const { start, end } = getSteccheWeekBounds()
+  return isDateInWeek(dateStr, start, end)
 }
 
 /**
@@ -254,10 +266,11 @@ export default function GrattaEVinciView({ t, user }) {
   }, [modalSearch, modalTypeFilter])
 
   // Caricamento dei dati dal backend con polling automatico ogni 15 secondi (multi-dispositivo)
-  const loadDataFromDb = useCallback(async (isSilent = false) => {
+  // `force`: ricarica subito dopo una mutazione conclusa (salta la finestra anti-sfarfallio di 600 ms)
+  const loadDataFromDb = useCallback(async (isSilent = false, force = false) => {
     // Non sovrascrivere lo stato se c'è un batch in attesa o se una mutazione è attiva
     const hasPendingDelta = Object.values(pendingSalesDeltaRef.current || {}).some((d) => d !== 0)
-    if (isMutating.current || hasPendingDelta || (Date.now() - lastMutationTimeRef.current < 600)) {
+    if (isMutating.current || hasPendingDelta || (!force && Date.now() - lastMutationTimeRef.current < 600)) {
       return
     }
 
@@ -332,22 +345,7 @@ export default function GrattaEVinciView({ t, user }) {
       // 5. Forniture caricate dal database (conteggi attivi filtrati sulla settimana con reset domenica)
       if (Array.isArray(backendPurchases)) {
         setPurchasesList(backendPurchases)
-        const counts = {}
-        backendPurchases.forEach((p) => {
-          if (isDateInCurrentSteccheWeek(p.purchaseDate)) {
-            if (p.price != null) {
-              const pKey = Number(p.price)
-              counts[pKey] = (counts[pKey] || 0) + getPurchasePacks(p)
-            } else if (p.description) {
-              const match = p.description.match(/da\s*€\s*([0-9]+(?:[.,][0-9]+)?)/i)
-              if (match) {
-                const pKey = parseFloat(match[1].replace(',', '.'))
-                counts[pKey] = (counts[pKey] || 0) + getPurchasePacks(p)
-              }
-            }
-          }
-        })
-        setSteccheCounts(counts)
+        setSteccheCounts(countSteccheByPrice(backendPurchases))
       }
 
       if (!isSilent) setSyncStatus('synced')
@@ -364,7 +362,7 @@ export default function GrattaEVinciView({ t, user }) {
     loadDataFromDb(false)
 
     const intervalId = setInterval(() => {
-      loadDataFromDb(true)
+      if (!document.hidden) loadDataFromDb(true)
     }, 15000)
 
     return () => {
@@ -373,7 +371,7 @@ export default function GrattaEVinciView({ t, user }) {
         clearTimeout(debounceTimerRef.current)
       }
     }
-  }, [loadDataFromDb, user])
+  }, [loadDataFromDb])
 
   // Reset delle vendite del giorno seguente con conferma — database-first con rollback
   const handleConfirmResetSales = async () => {
@@ -405,7 +403,7 @@ export default function GrattaEVinciView({ t, user }) {
       isMutating.current = false
       lastMutationTimeRef.current = Date.now()
       setShowResetConfirmModal(false)
-      loadDataFromDb(true)
+      loadDataFromDb(true, true)
     }
   }
 
@@ -474,7 +472,7 @@ export default function GrattaEVinciView({ t, user }) {
       } finally {
         isMutating.current = false
         lastMutationTimeRef.current = Date.now()
-        loadDataFromDb(true)
+        loadDataFromDb(true, true)
       }
     }, 300)
   }
@@ -520,7 +518,7 @@ export default function GrattaEVinciView({ t, user }) {
     } finally {
       isMutating.current = false
       lastMutationTimeRef.current = Date.now()
-      loadDataFromDb(true)
+      loadDataFromDb(true, true)
     }
   }
 
@@ -550,7 +548,7 @@ export default function GrattaEVinciView({ t, user }) {
     } finally {
       isMutating.current = false
       lastMutationTimeRef.current = Date.now()
-      loadDataFromDb(true)
+      loadDataFromDb(true, true)
     }
   }
 
@@ -612,7 +610,7 @@ export default function GrattaEVinciView({ t, user }) {
     } finally {
       isMutating.current = false
       lastMutationTimeRef.current = Date.now()
-      loadDataFromDb(true)
+      loadDataFromDb(true, true)
     }
   }
 
@@ -679,7 +677,7 @@ export default function GrattaEVinciView({ t, user }) {
     } finally {
       isMutating.current = false
       lastMutationTimeRef.current = Date.now()
-      loadDataFromDb(true)
+      loadDataFromDb(true, true)
     }
   }
 
@@ -712,7 +710,7 @@ export default function GrattaEVinciView({ t, user }) {
       } finally {
         isMutating.current = false
         lastMutationTimeRef.current = Date.now()
-        loadDataFromDb(true)
+        loadDataFromDb(true, true)
       }
     }
   }
@@ -749,28 +747,6 @@ export default function GrattaEVinciView({ t, user }) {
       await api.gv.updateStecca(price, delta)
       setSyncStatus('synced')
 
-      // 3. Ricarica l'elenco forniture dal backend per allineare tutto
-      const updatedPurchases = await api.gv.getPurchases()
-      if (Array.isArray(updatedPurchases)) {
-        setPurchasesList(updatedPurchases)
-        const counts = {}
-        updatedPurchases.forEach((p) => {
-          if (isDateInCurrentSteccheWeek(p.purchaseDate)) {
-            if (p.price != null) {
-              const pKey = Number(p.price)
-              counts[pKey] = (counts[pKey] || 0) + getPurchasePacks(p)
-            } else if (p.description) {
-              const match = p.description.match(/da\s*€\s*([0-9]+(?:[.,][0-9]+)?)/i)
-              if (match) {
-                const pKey = parseFloat(match[1].replace(',', '.'))
-                counts[pKey] = (counts[pKey] || 0) + getPurchasePacks(p)
-              }
-            }
-          }
-        })
-        setSteccheCounts(counts)
-      }
-
       const tickets = getTicketsPerStecca(price) * Math.abs(delta)
       const cost = (Math.abs(delta) * PREZZO_STECCA).toFixed(2).replace('.', ',')
       const formattedP = Number(price).toFixed(2).replace('.', ',')
@@ -789,7 +765,7 @@ export default function GrattaEVinciView({ t, user }) {
     } finally {
       isMutating.current = false
       lastMutationTimeRef.current = Date.now()
-      loadDataFromDb(true)
+      loadDataFromDb(true, true)
     }
   }
 
@@ -882,7 +858,7 @@ export default function GrattaEVinciView({ t, user }) {
       lastMutationTimeRef.current = 0
       setIsImportingInvoice(false)
       // Ricarica anche le fasce: l'import crea quelle mancanti (es. € 0,50)
-      loadDataFromDb(true)
+      loadDataFromDb(true, true)
     }
   }
 
@@ -914,7 +890,7 @@ export default function GrattaEVinciView({ t, user }) {
       isMutating.current = false
       lastMutationTimeRef.current = 0
       setIsSavingSingles(false)
-      loadDataFromDb(true)
+      loadDataFromDb(true, true)
     }
   }
 
@@ -923,26 +899,7 @@ export default function GrattaEVinciView({ t, user }) {
     setPurchaseError('')
     try {
       await api.gv.deletePurchase(id)
-      const updated = await api.gv.getPurchases()
-      if (Array.isArray(updated)) {
-        setPurchasesList(updated)
-        const counts = {}
-        updated.forEach((p) => {
-          if (isDateInCurrentSteccheWeek(p.purchaseDate)) {
-            if (p.price != null) {
-              const pKey = Number(p.price)
-              counts[pKey] = (counts[pKey] || 0) + getPurchasePacks(p)
-            } else if (p.description) {
-              const match = p.description.match(/da\s*€\s*([0-9]+(?:[.,][0-9]+)?)/i)
-              if (match) {
-                const pKey = parseFloat(match[1].replace(',', '.'))
-                counts[pKey] = (counts[pKey] || 0) + getPurchasePacks(p)
-              }
-            }
-          }
-        })
-        setSteccheCounts(counts)
-      }
+      await loadDataFromDb(true, true)
       setPurchaseSuccess('Fornitura eliminata con successo dal database.')
       setPurchaseToDelete(null)
       setTimeout(() => setPurchaseSuccess(''), 4000)

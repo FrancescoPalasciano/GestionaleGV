@@ -10,9 +10,9 @@ import java.util.List;
 @Repository
 public interface GvPurchaseRepository extends JpaRepository<GvPurchase, Long> {
 
-    List<GvPurchase> findByTabacchinoIdAndPurchaseDateAndDeletedFalse(Long tabacchinoId, LocalDate purchaseDate);
-
     List<GvPurchase> findByTabacchinoIdAndPurchaseDateBetweenAndDeletedFalse(Long tabacchinoId, LocalDate start, LocalDate end);
 
     List<GvPurchase> findByTabacchinoIdAndDeletedFalseOrderByPurchaseDateDesc(Long tabacchinoId);
+
+    boolean existsByTabacchinoIdAndDeletedFalseAndDescriptionEndingWith(Long tabacchinoId, String suffix);
 }

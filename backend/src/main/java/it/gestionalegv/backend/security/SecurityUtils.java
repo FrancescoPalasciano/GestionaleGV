@@ -41,6 +41,10 @@ public class SecurityUtils {
      * @return ID del tabacchino
      */
     public Long getCurrentTabacchinoId() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth != null && auth.getPrincipal() instanceof TabacchinoUserDetails principal) {
+            return principal.getTabacchinoId();
+        }
         return getCurrentTabacchino().getId();
     }
 }

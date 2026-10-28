@@ -55,7 +55,10 @@ export const tokenStorage = {
   }
 };
 
-async function request(endpoint, options = {}) {
+// Emesso a ogni chiamata API fallita per problemi di rete (backend irraggiungibile, timeout)
+export const NETWORK_ERROR_EVENT = 'api:network-error';
+
+async function request(endpoint, { timeoutMs, ...options } = {}) {
   const token = tokenStorage.get();
   // Con FormData il browser imposta da solo Content-Type multipart con il boundary
   const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
@@ -65,9 +68,12 @@ async function request(endpoint, options = {}) {
     ...options.headers,
   };
 
+  const controller = timeoutMs ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
   const config = {
     ...options,
     headers,
+    ...(controller ? { signal: controller.signal } : {}),
   };
 
   try {
@@ -94,12 +100,18 @@ async function request(endpoint, options = {}) {
 
     return data;
   } catch (err) {
-    if (err.name === 'TypeError' && err.message.includes('fetch')) {
+    // TypeError: fetch fallita (rete giù, DNS, CORS); AbortError: timeout scaduto
+    if (err.name === 'AbortError' || (err.name === 'TypeError' && /fetch|network|load failed/i.test(err.message))) {
       const netError = new Error('NETWORK_ERROR');
       netError.isNetworkError = true;
+      if (endpoint !== '/health' && typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent(NETWORK_ERROR_EVENT));
+      }
       throw netError;
     }
     throw err;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -134,7 +146,7 @@ export const api = {
 
   // Health check
   checkHealth: async () => {
-    return await request('/health');
+    return await request('/health', { timeoutMs: 5000 });
   },
 
   logout: () => {
@@ -160,12 +172,6 @@ export const api = {
     getSalesToday: async () => {
       return await request('/gv/sales/today');
     },
-    updateSale: async (price, delta) => {
-      return await request('/gv/sales', {
-        method: 'POST',
-        body: JSON.stringify({ price, delta }),
-      });
-    },
     updateSaleAndLog: async (price, delta, timeRecorded) => {
       return await request('/gv/sales/transaction', {
         method: 'POST',
@@ -180,31 +186,14 @@ export const api = {
     getWinningsToday: async () => {
       return await request('/gv/winnings/today');
     },
-    addWinning: async (data) => {
-      return await request('/gv/winnings', {
-        method: 'POST',
-        body: JSON.stringify(data),
-      });
-    },
     addWinningAndLog: async (data) => {
       return await request('/gv/winnings/transaction', {
         method: 'POST',
         body: JSON.stringify(data),
       });
     },
-    deleteWinning: async (id) => {
-      return await request(`/gv/winnings/${id}`, {
-        method: 'DELETE',
-      });
-    },
     getTransactionsToday: async () => {
       return await request('/gv/transactions/today');
-    },
-    logTransaction: async (data) => {
-      return await request('/gv/transactions', {
-        method: 'POST',
-        body: JSON.stringify(data),
-      });
     },
     deleteTransaction: async (id) => {
       return await request(`/gv/transactions/${id}`, {
@@ -214,12 +203,6 @@ export const api = {
     getPurchases: async (period) => {
       const query = period ? `?period=${encodeURIComponent(period)}` : '';
       return await request(`/gv/purchases${query}`);
-    },
-    addPurchase: async (data) => {
-      return await request('/gv/purchases', {
-        method: 'POST',
-        body: JSON.stringify(data),
-      });
     },
     updateStecca: async (price, delta) => {
       return await request('/gv/purchases/stecca', {

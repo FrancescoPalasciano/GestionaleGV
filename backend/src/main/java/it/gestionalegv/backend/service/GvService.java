@@ -24,6 +24,14 @@ public class GvService {
 
     private static final Logger log = LoggerFactory.getLogger(GvService.class);
     private static final String INVOICE_DESC_SEPARATOR = " · ";
+    private static final BigDecimal AGGIO_RATE = new BigDecimal("0.08");
+    // Prezzo del biglietto nella descrizione dei record storici senza campo price (es. "2 stecche da € 5,00")
+    private static final java.util.regex.Pattern PRICE_IN_DESCRIPTION =
+            java.util.regex.Pattern.compile("da\\s*[^0-9]*([0-9]+(?:[.,][0-9]+)?)", java.util.regex.Pattern.CASE_INSENSITIVE);
+    private static final DateTimeFormatter TIME_FORMATTER = DateTimeFormatter.ofPattern("HH:mm");
+    private static final DateTimeFormatter WEEKDAY_SHORT = DateTimeFormatter.ofPattern("EEE", Locale.ITALIAN);
+    private static final DateTimeFormatter DAY_FULL_WITH_YEAR = DateTimeFormatter.ofPattern("EEEE d MMMM yyyy", Locale.ITALIAN);
+    private static final DateTimeFormatter DAY_FULL = DateTimeFormatter.ofPattern("EEEE d MMMM", Locale.ITALIAN);
     private static final List<BigDecimal> DEFAULT_PRICE_TIERS = Arrays.asList(
             BigDecimal.valueOf(1),
             BigDecimal.valueOf(2),
@@ -90,6 +98,14 @@ public class GvService {
     }
 
     public GvSaleDTO updateSale(Long tabacchinoId, BigDecimal price, Integer delta) {
+        return toSaleDTO(applySaleDelta(tabacchinoId, price, delta).sale());
+    }
+
+    private record SaleChange(GvSale sale, int previousQuantity) {
+    }
+
+    /** Applica il delta al contatore del giorno (riga bloccata in scrittura) e restituisce anche la quantità precedente. */
+    private SaleChange applySaleDelta(Long tabacchinoId, BigDecimal price, Integer delta) {
         LocalDate today = LocalDate.now();
         Tabacchino tabacchino = getTabacchino(tabacchinoId);
         BigDecimal normalizedPrice = price.setScale(2, RoundingMode.HALF_UP);
@@ -97,9 +113,10 @@ public class GvService {
         Optional<GvSale> existingSaleOpt = saleRepository.findByTabacchinoIdAndPriceAndSaleDate(tabacchinoId, normalizedPrice, today);
 
         GvSale sale;
+        int baseQuantity = 0;
         if (existingSaleOpt.isPresent()) {
             sale = existingSaleOpt.get();
-            int baseQuantity = Boolean.TRUE.equals(sale.getDeleted()) ? 0 : (sale.getQuantity() != null ? sale.getQuantity() : 0);
+            baseQuantity = Boolean.TRUE.equals(sale.getDeleted()) ? 0 : (sale.getQuantity() != null ? sale.getQuantity() : 0);
             int newQuantity = Math.max(0, baseQuantity + delta);
             sale.setQuantity(newQuantity);
             sale.setDeleted(false);
@@ -113,22 +130,15 @@ public class GvService {
             sale.setUpdatedAt(LocalDateTime.now());
         }
 
-        GvSale saved = saleRepository.save(sale);
-        return toSaleDTO(saved);
+        return new SaleChange(saleRepository.save(sale), baseQuantity);
     }
 
     /** Aggiorna il contatore e registra lo storico nella stessa transazione DB. */
     public GvSaleDTO updateSaleAndLog(Long tabacchinoId, GvSaleTransactionRequest request) {
         BigDecimal price = request.getPrice().setScale(2, RoundingMode.HALF_UP);
-        LocalDate today = LocalDate.now();
-        int previousQuantity = saleRepository
-                .findByTabacchinoIdAndPriceAndSaleDate(tabacchinoId, price, today)
-                .filter(s -> !Boolean.TRUE.equals(s.getDeleted()))
-                .map(GvSale::getQuantity)
-                .orElse(0);
-
-        GvSaleDTO updated = updateSale(tabacchinoId, price, request.getDelta());
-        int appliedDelta = updated.getQuantity() - previousQuantity;
+        SaleChange change = applySaleDelta(tabacchinoId, price, request.getDelta());
+        GvSaleDTO updated = toSaleDTO(change.sale());
+        int appliedDelta = updated.getQuantity() - change.previousQuantity();
         if (appliedDelta != 0) {
             int quantity = Math.abs(appliedDelta);
             GvTransactionLogCreateRequest logRequest = new GvTransactionLogCreateRequest();
@@ -201,7 +211,7 @@ public class GvService {
 
         String timeRecorded = request.getTimeRecorded();
         if (timeRecorded == null || timeRecorded.isBlank()) {
-            timeRecorded = now.format(DateTimeFormatter.ofPattern("HH:mm"));
+            timeRecorded = now.format(TIME_FORMATTER);
         }
 
         GvWinning winning = new GvWinning(
@@ -263,7 +273,7 @@ public class GvService {
 
         String timeRecorded = request.getTimeRecorded();
         if (timeRecorded == null || timeRecorded.isBlank()) {
-            timeRecorded = now.format(DateTimeFormatter.ofPattern("HH:mm"));
+            timeRecorded = now.format(TIME_FORMATTER);
         }
 
         GvTransactionLog logEntry = new GvTransactionLog(
@@ -334,11 +344,6 @@ public class GvService {
                 .stream().map(this::toPurchaseDTO).collect(Collectors.toList());
     }
 
-    @Transactional(readOnly = true)
-    public List<GvPurchaseDTO> getPurchasesThisWeek(Long tabacchinoId) {
-        return getPurchases(tabacchinoId, "stecche_week");
-    }
-
     public GvPurchaseDTO addPurchase(Long tabacchinoId, GvPurchaseCreateRequest request) {
         Tabacchino tabacchino = getTabacchino(tabacchinoId);
         LocalDate pDate = request.getPurchaseDate() != null ? request.getPurchaseDate() : LocalDate.now();
@@ -393,11 +398,15 @@ public class GvService {
             // Storno di una stecca per questo prezzo
             List<GvPurchase> list = purchaseRepository.findByTabacchinoIdAndDeletedFalseOrderByPurchaseDateDesc(tabacchinoId);
             for (GvPurchase p : list) {
-                boolean matchPrice = (p.getPrice() != null && p.getPrice().compareTo(price) == 0);
-                boolean matchDesc = (p.getDescription() != null && p.getDescription().contains(String.format(java.util.Locale.ITALIAN, "%.2f", price.doubleValue())));
+                // Il prezzo salvato fa fede; la descrizione serve solo per i record storici senza prezzo
+                // (con "contains" un € 5,00 combaciava anche con € 15,00 e € 25,00)
+                boolean matches = p.getPrice() != null
+                        ? p.getPrice().compareTo(price) == 0
+                        : p.getDescription() != null && extractPriceFromDescription(p.getDescription())
+                                .map(d -> d.compareTo(price) == 0).orElse(false);
                 // Le forniture di biglietti singoli (0 stecche) non si stornano a stecca
                 boolean isSingles = p.getQuantity() != null && p.getQuantity() == 0;
-                if ((matchPrice || matchDesc) && !isSingles) {
+                if (matches && !isSingles) {
                     int currentQty = p.getQuantity() != null ? p.getQuantity() : 1;
                     if (currentQty <= 1) {
                         p.setDeleted(true);
@@ -474,9 +483,7 @@ public class GvService {
 
     private boolean isInvoiceImported(Long tabacchinoId, String orderNumber) {
         if (orderNumber == null || orderNumber.isBlank()) return false;
-        String marker = invoiceMarker(orderNumber);
-        return purchaseRepository.findByTabacchinoIdAndDeletedFalseOrderByPurchaseDateDesc(tabacchinoId).stream()
-                .anyMatch(p -> p.getDescription() != null && p.getDescription().endsWith(marker));
+        return purchaseRepository.existsByTabacchinoIdAndDeletedFalseAndDescriptionEndingWith(tabacchinoId, invoiceMarker(orderNumber));
     }
 
     @Transactional(readOnly = true)
@@ -656,7 +663,7 @@ public class GvService {
             }
         }
 
-        BigDecimal totalAggio = totalRevenue.multiply(new BigDecimal("0.08")).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal totalAggio = totalRevenue.multiply(AGGIO_RATE).setScale(2, RoundingMode.HALF_UP);
 
         // ── Calcolo Vincite ──────────────────────────────────────────────────
         BigDecimal totalWinnings = BigDecimal.ZERO;
@@ -692,10 +699,7 @@ public class GvService {
 
             BigDecimal pPrice = purchase.getPrice();
             if (pPrice == null && purchase.getDescription() != null) {
-                java.util.regex.Matcher m = java.util.regex.Pattern.compile("da\\s*[^0-9]*([0-9]+(?:[.,][0-9]+)?)", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(purchase.getDescription());
-                if (m.find()) {
-                    pPrice = new BigDecimal(m.group(1).replace(',', '.'));
-                }
+                pPrice = extractPriceFromDescription(purchase.getDescription()).orElse(null);
             }
             if (pPrice != null) {
                 pPrice = pPrice.setScale(2, RoundingMode.HALF_UP);
@@ -741,7 +745,7 @@ public class GvService {
             BigDecimal price = entry.getKey();
             int qty = entry.getValue();
             BigDecimal rev = price.multiply(BigDecimal.valueOf(qty));
-            BigDecimal agg = rev.multiply(new BigDecimal("0.08")).setScale(2, RoundingMode.HALF_UP);
+            BigDecimal agg = rev.multiply(AGGIO_RATE).setScale(2, RoundingMode.HALF_UP);
             BigDecimal share = totalRevenue.compareTo(BigDecimal.ZERO) > 0
                     ? rev.multiply(new BigDecimal("100")).divide(totalRevenue, 1, RoundingMode.HALF_UP)
                     : BigDecimal.ZERO;
@@ -802,17 +806,16 @@ public class GvService {
 
                 slotRev = slotRev.max(BigDecimal.ZERO);
                 slotTickets = Math.max(0, slotTickets);
-                BigDecimal slotAggio = slotRev.multiply(new BigDecimal("0.08")).setScale(2, RoundingMode.HALF_UP);
+                BigDecimal slotAggio = slotRev.multiply(AGGIO_RATE).setScale(2, RoundingMode.HALF_UP);
                 chartPoints.add(new GvStatisticsDTO.ChartPoint(slotLabel, fullLabel, slotRev, slotAggio, slotWins, slotTickets));
             }
         } else if ("week".equals(p) || "month".equals(p)) {
             // Un punto per ogni giorno della settimana o del mese.
             for (LocalDate dayDate = startDate; !dayDate.isAfter(endDate); dayDate = dayDate.plusDays(1)) {
                 String dayLabel = "week".equals(p)
-                        ? dayDate.format(DateTimeFormatter.ofPattern("EEE", itLocale))
+                        ? dayDate.format(WEEKDAY_SHORT)
                         : String.format("%02d", dayDate.getDayOfMonth());
-                String fullLabel = dayDate.format(DateTimeFormatter.ofPattern(
-                        "week".equals(p) ? "EEEE d MMMM yyyy" : "EEEE d MMMM", itLocale));
+                String fullLabel = dayDate.format("week".equals(p) ? DAY_FULL_WITH_YEAR : DAY_FULL);
 
                 BigDecimal dayRev = BigDecimal.ZERO;
                 int dayTickets = 0;
@@ -838,7 +841,7 @@ public class GvService {
                     }
                 }
 
-                BigDecimal dayAggio = dayRev.multiply(new BigDecimal("0.08")).setScale(2, RoundingMode.HALF_UP);
+                BigDecimal dayAggio = dayRev.multiply(AGGIO_RATE).setScale(2, RoundingMode.HALF_UP);
                 chartPoints.add(new GvStatisticsDTO.ChartPoint(dayLabel, fullLabel, dayRev, dayAggio, dayWins, dayTickets));
             }
         } else if ("year".equals(p)) {
@@ -874,7 +877,7 @@ public class GvService {
                     }
                 }
 
-                BigDecimal monthAggio = monthRev.multiply(new BigDecimal("0.08")).setScale(2, RoundingMode.HALF_UP);
+                BigDecimal monthAggio = monthRev.multiply(AGGIO_RATE).setScale(2, RoundingMode.HALF_UP);
                 chartPoints.add(new GvStatisticsDTO.ChartPoint(mShort, mFull, monthRev, monthAggio, monthWins, monthTickets));
             }
         }
@@ -886,6 +889,11 @@ public class GvService {
     // ─────────────────────────────────────────────────────────────────────────
     // Helper Methods
     // ─────────────────────────────────────────────────────────────────────────
+
+    private static Optional<BigDecimal> extractPriceFromDescription(String description) {
+        java.util.regex.Matcher m = PRICE_IN_DESCRIPTION.matcher(description);
+        return m.find() ? Optional.of(new BigDecimal(m.group(1).replace(',', '.'))) : Optional.empty();
+    }
 
     private Tabacchino getTabacchino(Long tabacchinoId) {
         return tabacchinoRepository.findById(tabacchinoId)

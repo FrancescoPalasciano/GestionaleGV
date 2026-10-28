@@ -75,7 +75,7 @@ export default function DashboardView({ t, onNavigateToGv }) {
   // Polling automatico ogni 20 secondi per sincronizzare nuove vendite/vincite
   useEffect(() => {
     const interval = setInterval(() => {
-      fetchStats(timeFilter, false)
+      if (!document.hidden) fetchStats(timeFilter, false)
     }, 20000)
 
     const handleFocus = () => {

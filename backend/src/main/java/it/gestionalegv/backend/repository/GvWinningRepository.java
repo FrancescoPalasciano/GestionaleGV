@@ -14,13 +14,4 @@ public interface GvWinningRepository extends JpaRepository<GvWinning, Long> {
             Long tabacchinoId, LocalDateTime start, LocalDateTime end
     );
 
-    List<GvWinning> findByTabacchinoIdAndRecordedAtBetweenOrderByRecordedAtDesc(
-            Long tabacchinoId, LocalDateTime start, LocalDateTime end
-    );
-
-    void deleteByTabacchinoIdAndId(Long tabacchinoId, Long id);
-
-    void deleteByTabacchinoIdAndRecordedAtBetween(
-            Long tabacchinoId, LocalDateTime start, LocalDateTime end
-    );
 }
