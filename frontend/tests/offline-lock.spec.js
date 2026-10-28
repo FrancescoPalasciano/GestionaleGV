@@ -13,6 +13,8 @@ async function mockApi(page, state) {
     const path = new URL(route.request().url()).pathname.replace('/api/v1', '')
     state.calls[path] = (state.calls[path] || 0) + 1
     if (state.down) return route.abort('internetdisconnected')
+    // Controllo partito quando il backend rispondeva, ma con la risposta che arriva in ritardo
+    if (path === '/health' && state.healthDelayMs) await new Promise((r) => setTimeout(r, state.healthDelayMs))
     let data
     if (path === '/health') data = { status: 'UP' }
     else if (path === '/tabacchini/me') data = user
@@ -84,4 +86,24 @@ test('a session opened while offline is kept and shows the lock', async ({ page 
   await lock(page).getByRole('button', { name: 'Riprova ora' }).click()
   await expect(lock(page)).toBeHidden()
   await expect(page.locator('.header-status-text')).toHaveText('Online')
+})
+
+test('a network error during a slow health check that still succeeds locks the app', async ({ page }) => {
+  const state = { down: false, calls: {} }
+  await mockApi(page, state)
+  await page.goto('/')
+  if (page.viewportSize().width <= 900) await page.getByRole('button', { name: 'Menu di navigazione' }).click()
+  await page.getByRole('navigation').getByRole('button', { name: 'Gratta e Vinci', exact: true }).click()
+  await expect(page.locator('.gv-price-card').first()).toBeVisible()
+
+  // Un controllo /health parte col backend su ma risponde dopo 1,5 s...
+  state.healthDelayMs = 1500
+  const healthBefore = state.calls['/health'] || 0
+  await page.evaluate(() => window.dispatchEvent(new Event('online')))
+  await expect.poll(() => state.calls['/health']).toBeGreaterThan(healthBefore)
+
+  // ...e nel frattempo il backend cade e una vendita fallisce: l'errore non va perso
+  state.down = true
+  await page.locator('.gv-ctrl-plus-1').first().click()
+  await expect(lock(page)).toBeVisible({ timeout: 4000 })
 })

@@ -18,6 +18,9 @@ export default function useConnectionStatus() {
   const statusRef = useRef(status)
   const failuresRef = useRef(0)
   const inFlightRef = useRef(false)
+  // Errore di rete arrivato mentre un controllo era già in corso: va ricontrollato subito dopo,
+  // perché quel controllo può essere partito quando il backend rispondeva ancora
+  const recheckRef = useRef(false)
 
   const applyStatus = useCallback((next) => {
     if (statusRef.current === next) return
@@ -28,7 +31,10 @@ export default function useConnectionStatus() {
 
   // `confirmed`: una richiesta reale è appena fallita, quindi basta un controllo negativo
   const check = useCallback(async (confirmed = false) => {
-    if (inFlightRef.current) return
+    if (inFlightRef.current) {
+      if (confirmed) recheckRef.current = true
+      return
+    }
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
       failuresRef.current = FAILURES_BEFORE_OFFLINE
       applyStatus('offline')
@@ -46,6 +52,10 @@ export default function useConnectionStatus() {
       }
     } finally {
       inFlightRef.current = false
+    }
+    if (recheckRef.current) {
+      recheckRef.current = false
+      await check(true)
     }
   }, [applyStatus])
 

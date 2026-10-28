@@ -30,6 +30,22 @@ function periodContainsToday(period, refDate) {
   return refDate === today
 }
 
+// Settimana e mese: al posto dello scontrino medio si mostra la differenza
+// tra biglietti caricati (forniture) e venduti nel periodo
+function isStockPeriod(period) {
+  return period === 'week' || period === 'month'
+}
+
+function getStockDiff(s) {
+  const loaded = Number(s?.totalSteccheTickets || 0)
+  const sold = Number(s?.totalTickets || 0)
+  return { loaded, sold, diff: loaded - sold }
+}
+
+function formatSignedTickets(n) {
+  return `${n > 0 ? '+' : n < 0 ? '−' : ''}${formatNumber(Math.abs(n))} pz`
+}
+
 function formatNumber(val) {
   const num = Number(val || 0)
   return num.toLocaleString('it-IT')
@@ -500,11 +516,18 @@ export default function StatisticheView({ t, user }) {
       <div class="kpi-sub">Incasso lordo meno rimborsi</div>
     </div>
 
-    <div class="kpi-box">
+    ${isStockPeriod(period) ? (() => {
+      const { loaded, sold, diff } = getStockDiff(s)
+      return `<div class="kpi-box">
+      <div class="kpi-label">Differenza Caricati / Venduti</div>
+      <div class="kpi-val ${diff >= 0 ? 'green' : 'amber'}">${formatSignedTickets(diff)}</div>
+      <div class="kpi-sub">Caricati ${formatNumber(loaded)} · Venduti ${formatNumber(sold)}</div>
+    </div>`
+    })() : `<div class="kpi-box">
       <div class="kpi-label">Scontrino Medio Biglietto</div>
       <div class="kpi-val">${formatEuro(s.averageTicketPrice)}</div>
       <div class="kpi-sub">Prezzo medio per tagliando</div>
-    </div>
+    </div>`}
 
     <div class="kpi-box">
       <div class="kpi-label">Payout Rate al Banco</div>
@@ -856,7 +879,31 @@ export default function StatisticheView({ t, user }) {
           </div>
         </div>
 
-        {/* KPI 6: Prezzo Medio del Biglietto */}
+        {/* KPI 6: settimana/mese → differenza biglietti caricati e venduti; altrimenti prezzo medio */}
+        {isStockPeriod(period) ? (() => {
+          const { loaded, sold, diff } = getStockDiff(stats)
+          return (
+            <div className="stats-kpi-card" data-testid="kpi-stock-diff">
+              <div className="stats-kpi-header">
+                <span className="stats-kpi-label">Differenza Caricati / Venduti</span>
+                <div className="stats-kpi-icon-wrap" aria-hidden="true">
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="17 1 21 5 17 9" />
+                    <path d="M3 11V9a4 4 0 0 1 4-4h14" />
+                    <polyline points="7 23 3 19 7 15" />
+                    <path d="M21 13v2a4 4 0 0 1-4 4H3" />
+                  </svg>
+                </div>
+              </div>
+              <div className={`stats-kpi-value ${isLoading ? '' : diff >= 0 ? 'text-green' : 'text-amber'}`}>
+                {isLoading ? '—' : formatSignedTickets(diff)}
+              </div>
+              <div className="stats-kpi-sub">
+                {isLoading ? 'Caricamento...' : `Caricati ${formatNumber(loaded)} · Venduti ${formatNumber(sold)}`}
+              </div>
+            </div>
+          )
+        })() : (
         <div className="stats-kpi-card">
           <div className="stats-kpi-header">
             <span className="stats-kpi-label">Scontrino Medio G&V</span>
@@ -875,6 +922,7 @@ export default function StatisticheView({ t, user }) {
             Prezzo medio per tagliando battuto
           </div>
         </div>
+        )}
       </section>
 
       {/* ── SEZIONE 2: GRAFICO ANDAMENTO ECONOMICO NEL TEMPO (SVG REATTIVO) ─── */}
