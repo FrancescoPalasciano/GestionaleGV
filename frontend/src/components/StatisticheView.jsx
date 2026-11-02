@@ -30,20 +30,20 @@ function periodContainsToday(period, refDate) {
   return refDate === today
 }
 
-// Settimana e mese: al posto dello scontrino medio si mostra la differenza
-// tra biglietti caricati (forniture) e venduti nel periodo
+// Settimana e mese: al posto dello scontrino medio si mostra la differenza in euro
+// tra il valore dei biglietti caricati (forniture) e quello dei venduti nel periodo
 function isStockPeriod(period) {
   return period === 'week' || period === 'month'
 }
 
 function getStockDiff(s) {
-  const loaded = Number(s?.totalSteccheTickets || 0)
-  const sold = Number(s?.totalTickets || 0)
+  const loaded = Number(s?.totalPurchases || 0)
+  const sold = Number(s?.totalRevenue || 0)
   return { loaded, sold, diff: loaded - sold }
 }
 
-function formatSignedTickets(n) {
-  return `${n > 0 ? '+' : n < 0 ? '−' : ''}${formatNumber(Math.abs(n))} pz`
+function formatSignedEuro(n) {
+  return `${n > 0 ? '+' : n < 0 ? '−' : ''}${formatEuro(Math.abs(n))}`
 }
 
 function formatNumber(val) {
@@ -520,8 +520,8 @@ export default function StatisticheView({ t, user }) {
       const { loaded, sold, diff } = getStockDiff(s)
       return `<div class="kpi-box">
       <div class="kpi-label">Differenza Caricati / Venduti</div>
-      <div class="kpi-val ${diff >= 0 ? 'green' : 'amber'}">${formatSignedTickets(diff)}</div>
-      <div class="kpi-sub">Caricati ${formatNumber(loaded)} · Venduti ${formatNumber(sold)}</div>
+      <div class="kpi-val ${diff >= 0 ? 'green' : 'amber'}">${formatSignedEuro(diff)}</div>
+      <div class="kpi-sub">Caricati ${formatEuro(loaded)} · Venduti ${formatEuro(sold)}</div>
     </div>`
     })() : `<div class="kpi-box">
       <div class="kpi-label">Scontrino Medio Biglietto</div>
@@ -896,10 +896,10 @@ export default function StatisticheView({ t, user }) {
                 </div>
               </div>
               <div className={`stats-kpi-value ${isLoading ? '' : diff >= 0 ? 'text-green' : 'text-amber'}`}>
-                {isLoading ? '—' : formatSignedTickets(diff)}
+                {isLoading ? '—' : formatSignedEuro(diff)}
               </div>
               <div className="stats-kpi-sub">
-                {isLoading ? 'Caricamento...' : `Caricati ${formatNumber(loaded)} · Venduti ${formatNumber(sold)}`}
+                {isLoading ? 'Caricamento...' : `Caricati ${formatEuro(loaded)} · Venduti ${formatEuro(sold)}`}
               </div>
             </div>
           )
