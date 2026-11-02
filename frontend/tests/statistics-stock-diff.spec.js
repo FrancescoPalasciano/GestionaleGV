@@ -4,8 +4,8 @@ const user = { nome: 'Francesco', cognome: 'Rossi', ragioneSociale: 'Tabaccheria
 
 function statistics(period, sold, loaded) {
   return {
-    period, totalRevenue: 645, totalAggio: 51.6, totalWinnings: 120, winningsCount: 4, netCashFlow: 525,
-    totalTickets: sold, totalPurchases: 1500, totalStecche: 5, totalSteccheTickets: loaded,
+    period, totalRevenue: sold, totalAggio: 51.6, totalWinnings: 120, winningsCount: 4, netCashFlow: 525,
+    totalTickets: 129, totalPurchases: loaded, totalStecche: 5, totalSteccheTickets: 300,
     averageTicketPrice: 5, payoutRate: 18.6, chartPoints: [], tierStats: [], purchaseTierStats: [],
   }
 }
@@ -35,8 +35,8 @@ async function openStatistics(page, numbers) {
 
 const stockCard = (page) => page.getByTestId('kpi-stock-diff')
 
-test('week and month show loaded minus sold tickets instead of the average ticket', async ({ page }) => {
-  await openStatistics(page, { week: [129, 300], month: [900, 600] })
+test('week and month show the value of loaded minus sold tickets instead of the average ticket', async ({ page }) => {
+  await openStatistics(page, { week: [645, 1500], month: [2000, 1500] })
 
   // Giorno: resta lo scontrino medio
   await expect(page.getByText('Scontrino Medio G&V')).toBeVisible()
@@ -44,14 +44,14 @@ test('week and month show loaded minus sold tickets instead of the average ticke
 
   await page.getByRole('tab', { name: 'Settimana' }).click()
   await expect(stockCard(page)).toContainText('Differenza Caricati / Venduti')
-  await expect(stockCard(page)).toContainText('+171 pz')
-  await expect(stockCard(page)).toContainText('Caricati 300 · Venduti 129')
+  await expect(stockCard(page)).toContainText('+€ 855,00')
+  await expect(stockCard(page)).toContainText('Caricati € 1500,00 · Venduti € 645,00')
   await expect(page.getByText('Scontrino Medio G&V')).toHaveCount(0)
 
   // Venduti più di quanti caricati nel periodo: differenza negativa
   await page.getByRole('tab', { name: 'Mese' }).click()
-  await expect(stockCard(page)).toContainText('−300 pz')
-  await expect(stockCard(page)).toContainText('Caricati 600 · Venduti 900')
+  await expect(stockCard(page)).toContainText('−€ 500,00')
+  await expect(stockCard(page)).toContainText('Caricati € 1500,00 · Venduti € 2000,00')
 
   await page.getByRole('tab', { name: 'Anno' }).click()
   await expect(page.getByText('Scontrino Medio G&V')).toBeVisible()
